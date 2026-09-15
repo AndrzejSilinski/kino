@@ -44,6 +44,7 @@ class BookingService
 {
     public function __construct(
         private readonly CartPricingService $cartPricing,
+        private readonly SeatStateRecorder $seatStates,
     ) {}
 
     /**
@@ -174,6 +175,11 @@ class BookingService
             $fresh->paid_at = $now;
             $fresh->save();
 
+            // Wersja stanu miejsc (Etap 6) — ostatnia instrukcja transakcji.
+            $this->seatStates->record((int) $fresh->screening_id, [
+                SeatStateRecorder::SOLD => $locks->pluck('seat_id')->all(),
+            ]);
+
             return $fresh;
         });
     }
@@ -222,13 +228,27 @@ class BookingService
                 return false;
             }
 
-            SeatLock::query()
+            // FOR UPDATE zamiast samego UPDATE: sweep mógł część blokad zwolnić
+            // wcześniej. Wersja ma objąć tylko miejsca zwolnione TUTAJ (Etap 6).
+            $locks = SeatLock::query()
                 ->where('booking_id', $fresh->id)
                 ->whereNull('released_at')
-                ->update(['released_at' => $now, 'updated_at' => $now]);
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id', 'seat_id']);
+
+            if ($locks->isNotEmpty()) {
+                SeatLock::query()
+                    ->whereIn('id', $locks->pluck('id'))
+                    ->update(['released_at' => $now, 'updated_at' => $now]);
+            }
 
             $fresh->status = $status;
             $fresh->save();
+
+            $this->seatStates->record((int) $fresh->screening_id, [
+                SeatStateRecorder::FREE => $locks->pluck('seat_id')->all(),
+            ]);
 
             return true;
         });
@@ -320,12 +340,25 @@ class BookingService
                 return false;
             }
 
+            // Do puli wracają miejsca z biletów, które nie były jeszcze anulowane.
+            // Wiersz rezerwacji jest pod FOR UPDATE, więc zbiór jej biletów nie
+            // zmieni się między tym odczytem a UPDATE-em (Etap 6).
+            $seatIds = Ticket::query()
+                ->where('booking_id', $fresh->id)
+                ->where('status', '!=', TicketStatus::Cancelled)
+                ->pluck('seat_id')
+                ->all();
+
             Ticket::query()
                 ->where('booking_id', $fresh->id)
                 ->update(['status' => TicketStatus::Cancelled, 'updated_at' => $now]);
 
             $fresh->status = BookingStatus::Cancelled;
             $fresh->save();
+
+            $this->seatStates->record((int) $fresh->screening_id, [
+                SeatStateRecorder::FREE => $seatIds,
+            ]);
 
             return true;
         });

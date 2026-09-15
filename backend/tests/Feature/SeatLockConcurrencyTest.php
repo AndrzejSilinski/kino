@@ -76,6 +76,11 @@ class SeatLockConcurrencyTest extends TestCase
 
         $this->assertSame(1, SeatLock::query()->count(),
             'Wycofane transakcje nie mogą zostawić po sobie żadnych wierszy.');
+
+        // Etap 6: 19 przegranych odpada na indeksie UNIQUE, zanim dotknie
+        // licznika wersji — licznik podbiła wyłącznie zwycięska transakcja.
+        $this->assertSame(1, $this->seatStateVersion($screening),
+            'Przegrane transakcje nie mogą podbić wersji stanu miejsc.');
     }
 
     public function test_rownoczesne_zadania_na_rozne_miejsca_wszystkie_sie_udaja(): void
@@ -97,6 +102,11 @@ class SeatLockConcurrencyTest extends TestCase
             'Różne miejsca nie kolidują — wszystkie żądania muszą się powieść.');
 
         $this->assertSame(10, SeatLock::query()->whereNull('released_at')->count());
+
+        // Etap 6: 10 równoległych zwycięzców = 10 kolejnych wersji. Żaden
+        // przyrost nie zginął, bo licznik podbija się pod blokadą wiersza.
+        $this->assertSame(10, $this->seatStateVersion($screening),
+            'Każda zatwierdzona zmiana stanu musi dostać własny numer wersji.');
     }
 
     public function test_blokowanie_wielu_miejsc_naraz_nie_powoduje_deadlockow(): void
@@ -127,6 +137,17 @@ class SeatLockConcurrencyTest extends TestCase
             ->get();
 
         $this->assertCount(0, $duplicates, 'Żadne miejsce nie może mieć dwóch aktywnych blokad.');
+
+        $this->assertSame(count($this->withResult($results, 'locked')), $this->seatStateVersion($screening),
+            'Wersja stanu miejsc = liczba udanych blokad, także przy nachodzących na siebie parach.');
+    }
+
+    /** Etap 6: aktualna wersja stanu miejsc seansu (0, gdy nic się nie zmieniło). */
+    private function seatStateVersion(Screening $screening): int
+    {
+        return (int) (\Illuminate\Support\Facades\DB::table('screening_seat_versions')
+            ->where('screening_id', $screening->id)
+            ->value('version') ?? 0);
     }
 
     /**

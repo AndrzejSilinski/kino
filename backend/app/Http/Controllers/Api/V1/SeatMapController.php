@@ -45,6 +45,9 @@ class SeatMapController extends Controller
                 'screening' => new ScreeningResource($screening),
                 'seats' => $map['seats'],
                 'summary' => $map['summary'],
+                // Wersja stanu miejsc: klient odrzuca zdarzenia WebSocket
+                // z wersją <= tej wartości (Etap 6).
+                'seat_state_version' => $map['version'],
             ],
             'meta' => [
                 // Identyfikator sesji wraca też w ciele, nie tylko

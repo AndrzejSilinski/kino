@@ -13,6 +13,7 @@ use App\Models\Screening;
 use App\Models\Seat;
 use App\Models\SeatLock;
 use App\Models\Ticket;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Support\Carbon;
@@ -44,6 +45,10 @@ use Illuminate\Support\Facades\DB;
  */
 class SeatLockService
 {
+    public function __construct(
+        private readonly SeatStateRecorder $seatStates,
+    ) {}
+
     /**
      * Zakłada blokady na wskazanych miejscach. Operacja jest all-or-nothing:
      * jeśli choć jedno miejsce jest zajęte, nie powstaje żadna blokada.
@@ -107,7 +112,14 @@ class SeatLockService
                     throw new SeatsUnavailableException($sold, $this->labelsFor($sold));
                 }
 
-                return $this->activeLocksFor($screening, $sessionId, $seatIds);
+                $locks = $this->activeLocksFor($screening, $sessionId, $seatIds);
+
+                // 4) Wersja stanu miejsc (Etap 6) — OSTATNIA instrukcja transakcji.
+                //    Stan zmieniły tylko nowo wstawione miejsca; retry własnych
+                //    miejsc ($toInsert puste) nie podbija licznika.
+                $this->seatStates->record($screening->id, [SeatStateRecorder::HELD => $toInsert]);
+
+                return $locks;
             });
         } catch (UniqueConstraintViolationException) {
             // SQLSTATE 23505 — ktoś nas ubiegł. Transakcja jest już wycofana; dopiero teraz,
@@ -131,28 +143,23 @@ class SeatLockService
     public function release(Screening $screening, array $seatIds, string $sessionId): int
     {
         $seatIds = $this->normalizeSeatIds($seatIds);
-        $now = Carbon::now();
 
-        return SeatLock::query()
+        return $this->releaseLocks($screening, SeatLock::query()
             ->where('screening_id', $screening->id)
             ->whereIn('seat_id', $seatIds)
             ->where('session_id', $sessionId)   // nie da się zwolnić cudzej blokady
             ->whereNull('booking_id')           // blokada wpięta w rezerwację należy do płatności
-            ->whereNull('released_at')
-            ->update(['released_at' => $now, 'updated_at' => $now]);
+            ->whereNull('released_at'));
     }
 
     /** Porzucenie sesji: zwalnia wszystko, co ta sesja trzyma na tym seansie. */
     public function releaseSession(Screening $screening, string $sessionId): int
     {
-        $now = Carbon::now();
-
-        return SeatLock::query()
+        return $this->releaseLocks($screening, SeatLock::query()
             ->where('screening_id', $screening->id)
             ->where('session_id', $sessionId)
             ->whereNull('booking_id')
-            ->whereNull('released_at')
-            ->update(['released_at' => $now, 'updated_at' => $now]);
+            ->whereNull('released_at'));
     }
 
     /**
@@ -197,10 +204,70 @@ class SeatLockService
             return 0;
         }
 
-        return SeatLock::query()
-            ->whereIn('id', $ids)
-            ->whereNull('released_at')   // ktoś mógł je zwolnić między SELECT-em a UPDATE-em
-            ->update(['released_at' => $now, 'updated_at' => $now]);
+        return DB::transaction(function () use ($ids, $now): int {
+            // FOR UPDATE: ktoś mógł zwolnić blokadę między SELECT-em a tą chwilą.
+            // Wersja i zdarzenie mają opisywać wiersze zwolnione przez TĘ
+            // transakcję, a nie wynik wcześniejszego SELECT-a (Etap 6).
+            $locks = SeatLock::query()
+                ->whereIn('id', $ids)
+                ->whereNull('released_at')
+                ->orderBy('id')
+                ->lockForUpdate()
+                ->get(['id', 'screening_id', 'seat_id']);
+
+            if ($locks->isEmpty()) {
+                return 0;
+            }
+
+            $released = SeatLock::query()
+                ->whereIn('id', $locks->pluck('id'))
+                ->update(['released_at' => $now, 'updated_at' => $now]);
+
+            // Porcja może objąć kilka seansów. Liczniki podbijamy rosnąco po
+            // screening_id — stała kolejność, więc bez deadlocków (jak seat_id).
+            foreach ($locks->groupBy('screening_id')->sortKeys() as $screeningId => $screeningLocks) {
+                $this->seatStates->record((int) $screeningId, [
+                    SeatStateRecorder::FREE => $screeningLocks->pluck('seat_id')->all(),
+                ]);
+            }
+
+            return $released;
+        });
+    }
+
+    /**
+     * Zwalnia blokady wskazane zapytaniem i rejestruje zmianę stanu (Etap 6).
+     *
+     * Dwa kroki w jednej transakcji: SELECT ... FOR UPDATE, potem UPDATE po id.
+     * Zablokowane wiersze nie zmienią się pod nami, więc lista miejsc jest
+     * dokładnie tą, którą zwolniła ta transakcja. Sam UPDATE zwraca tylko
+     * liczbę, a wersja i zdarzenie potrzebują identyfikatorów miejsc.
+     * Kolejność po id — ta sama co w sweepExpired().
+     *
+     * @param  Builder<SeatLock>  $query
+     * @return int  liczba faktycznie zwolnionych blokad
+     */
+    private function releaseLocks(Screening $screening, Builder $query): int
+    {
+        return DB::transaction(function () use ($screening, $query): int {
+            $now = Carbon::now();
+
+            $locks = $query->orderBy('id')->lockForUpdate()->get(['id', 'seat_id']);
+
+            if ($locks->isEmpty()) {
+                return 0;
+            }
+
+            $released = SeatLock::query()
+                ->whereIn('id', $locks->pluck('id'))
+                ->update(['released_at' => $now, 'updated_at' => $now]);
+
+            $this->seatStates->record($screening->id, [
+                SeatStateRecorder::FREE => $locks->pluck('seat_id')->all(),
+            ]);
+
+            return $released;
+        });
     }
 
     /**

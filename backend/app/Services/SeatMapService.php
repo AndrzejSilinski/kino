@@ -31,14 +31,26 @@ class SeatMapService
     public const STATUS_SOLD = 'sold';
     public const STATUS_UNAVAILABLE = 'unavailable';
 
+    public function __construct(
+        private readonly SeatStateRecorder $seatStates,
+    ) {}
+
     /**
      * @return array{
+     *     version: int,
      *     seats: array<int, array<string, mixed>>,
      *     summary: array<string, int>
      * }
      */
     public function build(Screening $screening, ?string $sessionId): array
     {
+        // 0. Wersja stanu miejsc (Etap 6) — odczytana PRZED stanem miejsc.
+        //    To dolna granica: każda zmiana z wersją <= $version jest już
+        //    w tym, co przeczytamy niżej. Nowsze klient nałoży ze zdarzeń
+        //    WebSocket; niosą stan absolutny, więc ponowne nałożenie nie szkodzi.
+        //    Dzięki tej kolejności nie potrzeba transakcji REPEATABLE READ.
+        $version = $this->seatStates->currentVersion($screening->id);
+
         // 1. Układ sali. Sortowanie po współrzędnych, żeby frontend mógł
         //    rysować sekwencyjnie bez własnego sortowania.
         $seats = Seat::query()
@@ -129,7 +141,7 @@ class SeatMapService
 
         $summary['total'] = count($mapped);
 
-        return ['seats' => $mapped, 'summary' => $summary];
+        return ['version' => $version, 'seats' => $mapped, 'summary' => $summary];
     }
 
     /**
