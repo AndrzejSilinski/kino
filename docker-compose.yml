@@ -1,7 +1,7 @@
 # Stos deweloperski Etapu 5:
 #   aplikacja: php (FPM), worker (kolejka), scheduler (harmonogram) — jeden obraz
 #   infrastruktura: nginx, postgres, redis, mailpit
-# Etap 6 dołoży kontener Reverb (WebSocket).
+# Etap 6: reverb (WebSocket, Laravel Reverb) — publikacja z PHP, klienci przez nginx.
 
 # ----------------------------------------------------------------------
 # Wspólna definicja kontenerów z kodem aplikacji.
@@ -95,6 +95,38 @@ services:
       # stderr) ląduje w /dev/null. /proc/1/fd/2 to stderr procesu głównego
       # kontenera, czyli dokładnie to, co pokazuje docker logs.
       SCHEDULE_OUTPUT: /proc/1/fd/2
+
+  # ------------------------------------------------------------------
+  # Reverb - serwer WebSocket (Etap 6)
+  #
+  # Ten sam obraz i kod co php, worker i scheduler (kotwica), inna rola:
+  # `php artisan reverb:start` to długo działający proces na pętli zdarzeń
+  # ReactPHP. Adres i port bierze z REVERB_SERVER_HOST i REVERB_SERVER_PORT.
+  #
+  # Bez sekcji ports: przeglądarka i telefon łączą się przez nginx
+  # (ws://localhost:8080/app/...), a kontenery PHP publikują zdarzenia
+  # prosto na http://reverb:8080 w sieci cinema. HTTP API Reverba
+  # (/apps/...) nie jest wystawione na zewnątrz.
+  #
+  # user 82:82 — jak worker i scheduler; proces nie potrzebuje roota.
+  # healthcheck — Reverb ma własny endpoint GET /up. Pytamy go PHP-em,
+  #   bo obraz nie musi zawierać curla. Port 8080 = REVERB_SERVER_PORT.
+  #
+  # PUŁAPKA (jak N): proces trzyma konfigurację w pamięci. Po zmianie
+  # REVERB_* w .env: docker compose restart reverb
+  # ------------------------------------------------------------------
+  reverb:
+    <<: *php-app
+    container_name: cinema_reverb
+    user: "82:82"
+    command: php artisan reverb:start
+    stop_grace_period: 10s
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8080/up') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
   # ------------------------------------------------------------------
   # Nginx - HTTP server, the only publicly exposed container
