@@ -1,0 +1,15 @@
+{
+  "name": "cinema-realtime-probe",
+  "private": true,
+  "description": "Sonda WebSocket Etapu 6: klient pusher-js przeciw Reverbowi przez nginx.",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "probe": "node probe.mjs"
+  },
+  "dependencies": {
+    "pusher-js": "8.6.0"
+  }
+}
