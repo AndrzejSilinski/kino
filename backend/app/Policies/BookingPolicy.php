@@ -54,4 +54,18 @@ class BookingPolicy
     {
         return false;
     }
+
+    /**
+     * Nasłuchiwanie kanału rezerwacji private-bookings.{reference} (Etap 6).
+     *
+     * WYŁĄCZNIE właściciel — inaczej niż view(), które wpuszcza też
+     * administratora. Kanał niesie zmiany statusu konkretnego zakupu
+     * (opłacona, bilety gotowe, wygasła) i służy ekranowi potwierdzenia
+     * klienta. Administrator ma własny feed sprzedaży (private-sales),
+     * więc nie ma powodu podsłuchiwać kanałów klientów.
+     */
+    public function listen(User $user, Booking $booking): bool
+    {
+        return $booking->user_id === $user->id;
+    }
 }

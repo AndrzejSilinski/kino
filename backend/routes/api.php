@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\CheckoutController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BookingController;
 use App\Http\Controllers\Api\V1\BookingTicketsController;
+use App\Http\Controllers\Api\V1\BroadcastingAuthController;
 use App\Http\Controllers\Api\V1\CinemaController;
 use App\Http\Controllers\Api\V1\ScreeningController;
 use App\Http\Controllers\Api\V1\SeatLockController;
@@ -160,3 +161,11 @@ Route::middleware(['auth:sanctum', ResolveBookingSession::class, 'throttle:seat-
 Route::middleware(['auth:sanctum', 'throttle:ticket-validation'])
     ->post('/tickets/validate', TicketValidationController::class)
     ->name('api.tickets.validate');
+
+// ─── 9. WebSocket: autoryzacja kanałów prywatnych (Etap 6) ─────────────
+// Bez auth:sanctum: kanał planu sali jest dostępny także dla kupującego
+// bez konta. Kto może słuchać którego kanału, rozstrzyga
+// ChannelAuthorizationService przez Policies. Limit w RealtimeServiceProvider.
+Route::post('/broadcasting/auth', BroadcastingAuthController::class)
+    ->middleware('throttle:broadcasting-auth')
+    ->name('api.broadcasting.auth');

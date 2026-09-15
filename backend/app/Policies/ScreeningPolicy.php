@@ -35,4 +35,21 @@ final class ScreeningPolicy
 
         return (int) $screening->loadMissing('hall')->hall->cinema_id === (int) $user->cinema_id;
     }
+
+    /**
+     * Oglądanie planu sali na żywo: kanał private-screenings.{id} (Etap 6).
+     *
+     * ?User — Gate wpuszcza gościa tylko wtedy, gdy parametr użytkownika
+     * dopuszcza null (Gate::parameterAllowsGuests). Blokować miejsca można
+     * bez konta (decyzja 8), więc plan sali na żywo też musi działać bez konta.
+     *
+     * Reguła jest ta sama co w SeatLockService::assertScreeningIsBookable():
+     * kanał ma sens tylko dla seansu, na który wciąż się sprzedaje. Dane na
+     * kanale są równoważne publicznemu GET seat-map, więc to bramka (seans
+     * w sprzedaży + limit żądań), a nie ochrona tajemnicy.
+     */
+    public function watchSeatMap(?User $user, Screening $screening): bool
+    {
+        return $screening->status->isBookable() && $screening->starts_at->isFuture();
+    }
 }
