@@ -1,0 +1,14 @@
+-- Baza dla testów automatycznych.
+--
+-- Obraz postgres wykonuje wszystko z /docker-entrypoint-initdb.d/ przy PIERWSZEJ
+-- inicjalizacji wolumenu danych — czyli dokładnie wtedy, gdy ktoś klonuje repo
+-- i robi `docker compose up`. Dzięki temu `php artisan test` działa od razu,
+-- bez ręcznego zakładania bazy.
+--
+-- Dlaczego osobna baza, a nie ta sama co deweloperska: testy czyszczą schemat
+-- przy każdym przebiegu (RefreshDatabase / DatabaseTruncation). Wskazanie bazy
+-- `cinema` oznaczałoby, że `php artisan test` kasuje dane demonstracyjne.
+--
+-- Skrypt wykonuje się jako użytkownik POSTGRES_USER, więc `cinema` jest
+-- właścicielem nowej bazy i Laravel może w niej zakładać tabele i rozszerzenia.
+CREATE DATABASE cinema_testing OWNER cinema;

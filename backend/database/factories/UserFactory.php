@@ -2,6 +2,8 @@
 
 namespace Database\Factories;
 
+use App\Enums\UserRole;
+use App\Models\Cinema;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -40,6 +42,24 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
+        ]);
+    }
+
+    /** Administrator: widzi i robi wszystko, bez przypisania do kina. */
+    public function admin(): static
+    {
+        return $this->state(fn (): array => ['role' => UserRole::Admin, 'cinema_id' => null]);
+    }
+
+    /**
+     * Pracownik obsługi przypisany do kina. Bez podanego kina tworzy nowe —
+     * rola staff bez kina i tak nie przeszłaby przez CHECK w bazie.
+     */
+    public function staff(?Cinema $cinema = null): static
+    {
+        return $this->state(fn (): array => [
+            'role' => UserRole::Staff,
+            'cinema_id' => $cinema?->id ?? Cinema::factory(),
         ]);
     }
 }

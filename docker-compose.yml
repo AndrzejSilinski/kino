@@ -1,26 +1,100 @@
-# Stage 0 - minimal stack: PHP + Nginx + PostgreSQL + Redis.
-# Later stages add: queue worker, scheduler, Reverb, Mailhog, RabbitMQ.
+# Stos deweloperski Etapu 5:
+#   aplikacja: php (FPM), worker (kolejka), scheduler (harmonogram) — jeden obraz
+#   infrastruktura: nginx, postgres, redis, mailpit
+# Etap 6 dołoży kontener Reverb (WebSocket).
+
+# ----------------------------------------------------------------------
+# Wspólna definicja kontenerów z kodem aplikacji.
+#
+# Jeden obraz, trzy role. Kotwica YAML (&php-app) i scalenie (<<: *php-app)
+# usuwają trzy kopie tej samej konfiguracji: zmiana wolumenu albo sieci
+# w jednym miejscu obejmuje wszystkie trzy kontenery.
+#
+# UWAGA: scalenie jest PŁYTKIE. Kontener, który nadpisuje depends_on,
+# musi powtórzyć całą listę zależności, a nie tylko dopisać nową.
+# ----------------------------------------------------------------------
+x-php-app: &php-app
+  build:
+    context: ./docker/php
+  image: cinema/php:dev
+  restart: unless-stopped
+  volumes:
+    # Bind mount: host code is visible inside the container.
+    # Editing a file on the host takes effect immediately.
+    - ./backend:/var/www/html
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+  networks:
+    - cinema
 
 services:
   # ------------------------------------------------------------------
-  # PHP-FPM - runs all application code
+  # PHP-FPM - obsługuje żądania HTTP przekazywane przez nginx
   # ------------------------------------------------------------------
   php:
-    build:
-      context: ./docker/php
+    <<: *php-app
     container_name: cinema_php
-    restart: unless-stopped
-    volumes:
-      # Bind mount: host code is visible inside the container.
-      # Editing a file on the host takes effect immediately.
-      - ./backend:/var/www/html
+
+  # ------------------------------------------------------------------
+  # Queue worker - wykonuje zadania z kolejki Redis (PDF, mail, push)
+  #
+  # user 82:82 — ten sam użytkownik co pule php-fpm (www-data w Alpine).
+  #   Pliki tworzone przez workera i przez żądania HTTP mają jednego
+  #   właściciela, więc nie powstaje mieszanka plików roota i www-data.
+  # --timeout=60 — twardy limit jednego zadania. MUSI być mniejszy niż
+  #   REDIS_QUEUE_RETRY_AFTER (90 s), inaczej Redis odda wciąż trwające
+  #   zadanie drugiemu procesowi i wykona się ono dwa razy.
+  # --tries=3 — wartość awaryjna dla zadań, które nie deklarują własnej
+  #   polityki ponowień. Nasze joby deklarują ją same (RetryPolicy).
+  # --max-time=3600 — proces kończy się co godzinę i restartuje go Docker;
+  #   chroni to przed powoli rosnącym zużyciem pamięci.
+  # stop_grace_period — docker stop wysyła SIGTERM i czeka. Worker kończy
+  #   bieżące zadanie (wymaga pcntl) zamiast przerywać je w połowie.
+  #
+  # PUŁAPKA: worker trzyma kod w pamięci. Po zmianie klasy joba trzeba
+  # zrestartować kontener: docker compose restart worker
+  # ------------------------------------------------------------------
+  worker:
+    <<: *php-app
+    container_name: cinema_worker
+    user: "82:82"
+    command: >-
+      php artisan queue:work redis
+      --queue=default
+      --tries=3
+      --timeout=60
+      --sleep=3
+      --max-time=3600
+    stop_grace_period: 75s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
-    networks:
-      - cinema
+      mailpit:
+        condition: service_started
+
+  # ------------------------------------------------------------------
+  # Scheduler - uruchamia harmonogram z routes/console.php co minutę
+  #
+  # schedule:work to pętla w pierwszym planie: co minutę woła schedule:run.
+  # Zastępuje wpis w crontabie, którego w kontenerze nie ma. Bez tego
+  # kontenera harmonogram istnieje tylko na papierze — schedule:list go
+  # pokazuje, ale nikt go nie wykonuje.
+  # ------------------------------------------------------------------
+  scheduler:
+    <<: *php-app
+    container_name: cinema_scheduler
+    user: "82:82"
+    command: php artisan schedule:work
+    environment:
+      # Pułapka V: bez tego wyjście zaplanowanych komend (także ich logi na
+      # stderr) ląduje w /dev/null. /proc/1/fd/2 to stderr procesu głównego
+      # kontenera, czyli dokładnie to, co pokazuje docker logs.
+      SCHEDULE_OUTPUT: /proc/1/fd/2
 
   # ------------------------------------------------------------------
   # Nginx - HTTP server, the only publicly exposed container
@@ -58,6 +132,8 @@ services:
     volumes:
       # Named volume - data survives `docker compose down`
       - pgdata:/var/lib/postgresql/data
+      # Skrypty wykonywane przy pierwszej inicjalizacji wolumenu (tworzą bazę testową)
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U cinema -d cinema"]
       interval: 5s
@@ -67,7 +143,9 @@ services:
       - cinema
 
   # ------------------------------------------------------------------
-  # Redis - cache, sessions, later: queues and broadcasting
+  # Redis - cache, sesje i kolejka zadań
+  # appendonly yes (AOF): zakolejkowane zadania przeżywają restart Redisa,
+  # tracimy najwyżej ostatnią sekundę zapisów.
   # ------------------------------------------------------------------
   redis:
     image: redis:7-alpine
@@ -78,6 +156,25 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
+    networks:
+      - cinema
+
+  # ------------------------------------------------------------------
+  # Mailpit - przechwytuje całą pocztę wysyłaną przez aplikację
+  #
+  # Następca Mailhoga (nierozwijanego od 2020 r.): te same porty,
+  # rozwijany na bieżąco. Nic nie wychodzi do prawdziwych skrzynek.
+  # Port SMTP 1025 NIE jest wystawiony na zewnątrz — potrzebują go tylko
+  # kontenery w sieci cinema. Na zewnątrz wystawiamy wyłącznie interfejs.
+  # ------------------------------------------------------------------
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: cinema_mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # interfejs WWW: http://localhost:8025
+    environment:
+      MP_MAX_MESSAGES: 500
     networks:
       - cinema
 

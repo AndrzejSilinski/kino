@@ -23,11 +23,29 @@
         <env name="BCRYPT_ROUNDS" value="4"/>
         <env name="BROADCAST_CONNECTION" value="null"/>
         <env name="CACHE_STORE" value="array"/>
-        <env name="DB_CONNECTION" value="sqlite"/>
-        <env name="DB_DATABASE" value=":memory:"/>
+
+        <!--
+            TESTY CHODZĄ NA PRAWDZIWYM POSTGRESIE, NIE NA SQLITE.
+
+            Domyślne "sqlite / :memory:" jest tu nie do użycia z trzech powodów:
+              1. SQLite nie zna CREATE UNIQUE INDEX ... WHERE (indeks częściowy),
+                 a to na nim opiera się cała atomowość blokowania miejsc;
+              2. SQLite nie zna EXCLUDE USING gist, więc migracja seansów nie przejdzie;
+              3. SQLite :memory: to jedno połączenie w jednym procesie — a obowiązkowy
+                 test współbieżności uruchamia N osobnych procesów, które muszą
+                 widzieć tę samą bazę.
+
+            Osobna baza cinema_testing, bo testy ją czyszczą przy każdym przebiegu;
+            wskazanie tu bazy 'cinema' skasowałoby dane deweloperskie.
+            DB_HOST, DB_USERNAME i DB_PASSWORD przychodzą z .env — PHPUnit ich nie rusza.
+        -->
+        <env name="DB_CONNECTION" value="pgsql"/>
+        <env name="DB_DATABASE" value="cinema_testing"/>
+
         <env name="DB_URL" value=""/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="TICKET_QR_KEY" value="phpunit-klucz-testowy-podpisu-qr-0123456789abcdef"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>
