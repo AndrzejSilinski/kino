@@ -45,6 +45,7 @@ class BookingService
     public function __construct(
         private readonly CartPricingService $cartPricing,
         private readonly SeatStateRecorder $seatStates,
+        private readonly RealtimeNotifier $realtime,
     ) {}
 
     /**
@@ -108,6 +109,11 @@ class BookingService
                     'expires_at' => $booking->expires_at,
                     'updated_at' => $now,
                 ]);
+
+            // Feed sprzedaży po COMMIT (Etap 6, blok G). Podwójne kliknięcie
+            // wychodzi wcześniej przez existingBookingFor — bez drugiego wpisu.
+            $bookingId = (int) $booking->id;
+            DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, BookingStatus::Pending));
 
             return $booking;
         });
@@ -250,6 +256,10 @@ class BookingService
                 SeatStateRecorder::FREE => $locks->pluck('seat_id')->all(),
             ]);
 
+            // Po seats.changed (zarejestrowanym wyżej) — ta sama kolejność po COMMIT.
+            $bookingId = (int) $fresh->id;
+            DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, $status));
+
             return true;
         });
     }
@@ -359,6 +369,9 @@ class BookingService
             $this->seatStates->record((int) $fresh->screening_id, [
                 SeatStateRecorder::FREE => $seatIds,
             ]);
+
+            $bookingId = (int) $fresh->id;
+            DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, BookingStatus::Cancelled));
 
             return true;
         });

@@ -4,8 +4,12 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Enums\BookingStatus;
+use App\Events\BookingStatusChanged;
+use App\Events\SalesActivity;
 use App\Events\SeatsChanged;
 use App\Events\SeatsResync;
+use App\Models\Booking;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Support\Facades\Log;
 use Throwable;
@@ -52,6 +56,49 @@ final class RealtimeNotifier
         return $this->send($event);
     }
 
+    /**
+     * Przejście rezerwacji: kanał właściciela + feed sprzedaży (blok G).
+     *
+     * Wołane PO COMMIT (DB::afterCommit w BookingService, słuchacz BookingPaid).
+     * $status to przejście z tej transakcji, nie odczyt z bazy (patrz
+     * BookingStatusChanged). Z bazy bierzemy tylko dane, które się nie
+     * zmieniają: referencję, seans, kino, kwotę i liczbę miejsc.
+     *
+     * Pending (nowa rezerwacja) idzie tylko do feedu: klient poznaje
+     * referencję z odpowiedzi checkoutu, więc nikt nie może jeszcze słuchać
+     * kanału rezerwacji — wysyłka byłaby pustym żądaniem HTTP.
+     */
+    public function bookingChanged(int $bookingId, BookingStatus $status): bool
+    {
+        try {
+            $booking = Booking::query()
+                ->with(['screening.movie', 'screening.hall.cinema'])
+                ->withCount('seatLocks')
+                ->find($bookingId);
+        } catch (Throwable $e) {
+            // Transakcja jest już zatwierdzona — błąd odczytu nie może
+            // zamienić udanej operacji w 500. Ta sama zasada co w send().
+            $this->warn(SalesActivity::class, $e);
+
+            return false;
+        }
+
+        if ($booking === null) {
+            return false;
+        }
+
+        $now = now();
+        $sent = true;
+
+        if ($status !== BookingStatus::Pending) {
+            $sent = $this->send(new BookingStatusChanged($booking->reference, $status, $now));
+        }
+
+        // Najpierw send(), potem &&: feed dostaje wpis także wtedy,
+        // gdy wysyłka na kanał właściciela się nie udała.
+        return $this->send(new SalesActivity($booking, $status, $now)) && $sent;
+    }
+
     /** Wysyła zdarzenie; zwraca false i loguje ostrzeżenie, gdy się nie udało. */
     public function send(ShouldBroadcastNow $event): bool
     {
@@ -62,12 +109,18 @@ final class RealtimeNotifier
 
             return true;
         } catch (Throwable $e) {
-            Log::warning('Nie udało się rozgłosić zdarzenia na żywo.', [
-                'event' => $event::class,
-                'exception' => $e::class,
-            ]);
+            $this->warn($event::class, $e);
 
             return false;
         }
+    }
+
+    /** Ostrzeżenie bez komunikatu wyjątku (decyzja 62): tylko klasy. */
+    private function warn(string $event, Throwable $e): void
+    {
+        Log::warning('Nie udało się rozgłosić zdarzenia na żywo.', [
+            'event' => $event,
+            'exception' => $e::class,
+        ]);
     }
 }
