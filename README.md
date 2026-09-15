@@ -10,8 +10,12 @@ bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
 |---|---|---|
 | Backend | Laravel 13, PHP 8.4 | wymóg zadania |
 | Baza danych | PostgreSQL 16 | patrz niżej |
-| Cache i sesje | Redis 7 | |
+| Cache, sesje, kolejka | Redis 7 (AOF) | jeden broker dla cache i kolejki, patrz Etap 5 |
 | Serwer WWW | nginx + PHP-FPM (Alpine) | |
+| Zadania w tle | kontenery `worker` (`queue:work`) i `scheduler` (`schedule:work`) | |
+| Płatności | Stripe (Payment Intents, `stripe/stripe-php`) | patrz Etap 4 |
+| Bilety | `endroid/qr-code` (QR), `dompdf/dompdf` (PDF) | patrz Etap 5 |
+| Poczta w środowisku deweloperskim | Mailpit | następca nierozwijanego Mailhoga |
 | Konteneryzacja | Docker Compose | |
 
 ### Dlaczego PostgreSQL, a nie MySQL
@@ -36,12 +40,38 @@ co i tak byłoby bez sensu przy testowaniu współbieżności.
 git clone <repo> cinema
 cd cinema
 cp backend/.env.example backend/.env
+
+# Klucz podpisu kodów QR (bez niego aplikacja nie wystawi biletu).
+sed -i "s/^TICKET_QR_KEY=$/TICKET_QR_KEY=$(openssl rand -hex 32)/" backend/.env
+# Klucze trybu testowego Stripe'a: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY
+# uzupełnij ręcznie w backend/.env (Dashboard Stripe → Developers → API keys).
+
+# Worker i scheduler działają jako www-data (uid 82) i zapisują do storage/.
+mkdir -p backend/storage/app/private/tickets backend/storage/fonts
+chmod -R a+rwX backend/storage backend/bootstrap/cache
+
 docker compose up --build -d
+docker compose exec php composer install
 docker compose exec php php artisan key:generate
 docker compose exec php php artisan migrate --seed
+docker compose restart worker scheduler
 ```
 
-Aplikacja: <http://localhost:8080>
+Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
+(wymóg „zero kroków ręcznych").
+
+| Adres | Co |
+|---|---|
+| <http://localhost:8080/api/v1> | REST API |
+| <http://localhost:8080/docs/api> | dokumentacja API (Scramble) |
+| <http://localhost:8025> | Mailpit — cała poczta wysłana przez aplikację |
+
+Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
+
+```bash
+stripe listen --forward-to localhost:8080/api/v1/webhooks/stripe
+# wypisany sekret whsec_... wpisz do STRIPE_WEBHOOK_SECRET w backend/.env
+```
 
 Konta testowe (hasło `password`):
 
@@ -51,19 +81,114 @@ Konta testowe (hasło `password`):
 | anna@cinema.test | klient |
 | piotr@cinema.test | klient |
 | maria@cinema.test | klient |
+| obsluga.warszawa@cinema.test | obsługa kina (Kino Atlantyk) |
+| obsluga.krakow@cinema.test | obsługa kina (Kino Wisła) |
+| obsluga.gdansk@cinema.test | obsługa kina (Kino Bałtyk) |
 
 ## Struktura repozytorium
-cat >> ~/cinema/README.md <<'MD'
+
+```text
+cinema/
+├── docker-compose.yml        php, worker, scheduler, nginx, postgres, redis, mailpit
+├── docker/
+│   ├── nginx/default.conf    kieruje wszystko poza public/ do PHP-FPM
+│   ├── php/Dockerfile        PHP 8.4-FPM Alpine: pdo_pgsql, redis, gd, intl, pcntl, zbar
+│   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
+├── backend/                  aplikacja Laravel (API, kolejki, scheduler)
+│   ├── app/
+│   │   ├── Services/         logika biznesowa: blokady, rezerwacje, płatności, bilety
+│   │   ├── Payments/         port PaymentGateway i jedyny adapter znający Stripe'a
+│   │   ├── Tickets/          podpis i obraz kodu QR, PDF, zapis PDF-ów
+│   │   ├── Http/             kontrolery (tylko HTTP), FormRequesty, zasoby JSON
+│   │   ├── Jobs/, Listeners/, Notifications/, Events/   praca w tle
+│   │   ├── Policies/         autoryzacja na poziomie zasobu
+│   │   └── Exceptions/       wyjątki domenowe z kodem HTTP i polem code
+│   ├── database/             migracje, fabryki, seedery
+│   ├── routes/api.php        /api/v1
+│   ├── routes/console.php    harmonogram
+│   └── tests/                PHPUnit na PostgreSQL (Unit, Feature)
+├── frontend/                 (Etap 8) Vue 3
+└── mobile/                   (Etap 9) Flutter
+```
 
 ## Model danych
-cat >> ~/cinema/README.md <<'MD'
+
+```mermaid
+erDiagram
+    cinemas ||--o{ halls : ma
+    halls ||--o{ seats : ma
+    price_categories ||--o{ seats : "kategoria miejsca"
+    movies ||--o{ screenings : ""
+    halls ||--o{ screenings : ""
+    screenings ||--o{ screening_prices : cennik
+    price_categories ||--o{ screening_prices : ""
+    screenings ||--o{ seat_locks : ""
+    seats ||--o{ seat_locks : ""
+    users ||--o{ bookings : ""
+    screenings ||--o{ bookings : ""
+    bookings ||--o{ tickets : ""
+    seats ||--o{ tickets : ""
+    cinemas |o--o{ users : "obsługa kina"
+    bookings |o--o{ stripe_webhook_events : ""
+```
+
+| Tabela | Rola | Najważniejsze ograniczenia |
+|---|---|---|
+| `cinemas` | kino: miasto, adres, **strefa czasowa**, `is_active` | `slug` UNIQUE |
+| `halls` | sala: typy projekcji (`jsonb`), wymiary siatki planu | `(cinema_id, name)` UNIQUE |
+| `seats` | miejsce: rząd, numer, typ, pozycja X/Y, kategoria cenowa | UNIQUE na `(hall, rząd, numer)` i na `(hall, x, y)`; CHECK typu |
+| `price_categories` | standard, premium, VIP, loża — globalne dla sieci | `slug` UNIQUE |
+| `movies` | tytuł, opis, czas trwania, kategoria wiekowa, gatunki (`jsonb`) | CHECK `duration_minutes > 0` |
+| `screenings` | seans: `starts_at`, `ends_at`, `slot_ends_at`, projekcja, wersja językowa, status | **`EXCLUDE USING gist (hall_id =, tstzrange(starts_at, slot_ends_at) &&) WHERE status <> 'cancelled'`** |
+| `screening_prices` | cena per seans i kategoria (grosze) | |
+| `seat_locks` | tymczasowa blokada miejsca | **`UNIQUE (screening_id, seat_id) WHERE released_at IS NULL`** |
+| `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień | CHECK statusu, `stripe_payment_intent_id` UNIQUE, indeks częściowy `bookings_confirmation_pending` |
+| `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`**, `code` UNIQUE |
+| `users` | klient, obsługa kina, administrator | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
+| `stripe_webhook_events` | dziennik przetworzonych zdarzeń Stripe'a (bez treści) | klucz główny = `event_id` |
+
+### Etap 1 — decyzje projektowe (1–13)
+
+1. **Miejsca należą do sali, nie do seansu.** Plan sali definiuje się raz;
+   stan miejsca na konkretnym seansie wynika z blokad i biletów, więc nie trzeba
+   generować milionów wierszy „miejsce × seans" z góry.
+2. **Love seat to jeden bilet z ceną pakietową.** Jedna pozycja na planie, jedna
+   blokada, jeden kod QR — bez sklejania dwóch biletów, które trzeba by
+   sprzedawać i anulować razem.
+3. **`seats.type` i `price_category_id` to dwa niezależne wymiary.** Typ mówi,
+   czym jest fotel (standard, podwójny, dla osób z niepełnosprawnością), kategoria
+   — ile kosztuje. Miejsce dla osoby z niepełnosprawnością może być w strefie
+   premium i odwrotnie.
+4. **Pieniądze zawsze jako `integer` w groszach.** Żadnych `float` ani `decimal`
+   w PHP; Stripe operuje na tych samych jednostkach.
+5. **Seans ma trzy znaczniki czasu.** `starts_at`, `ends_at` (koniec filmu)
+   i `slot_ends_at` (koniec sprzątania). Kolizje sal pilnuje `slot_ends_at`,
+   a widz i raporty patrzą na `ends_at`.
+6. **`tickets.screening_id` zdenormalizowane.** Bez tej kolumny indeks częściowy
+   „jeden bilet na miejsce na seansie" nie miałby czego obejmować (seans jest
+   w `bookings`, a indeks może obejmować tylko jedną tabelę).
+7. **`seat_locks` używa `released_at` zamiast `DELETE`.** Ślad audytowy, a indeks
+   częściowy i tak obejmuje tylko aktywne blokady.
+8. **`bookings.user_id NOT NULL`.** Zakup wymaga konta; blokować miejsca można
+   anonimowo (sesja zakupowa), ale płacić już nie.
+9. **`bookings.reference` = ULID, `tickets.code` = UUID v4.** Numer rezerwacji jest
+   sortowalny i czytelny dla supportu; kod biletu nie zdradza czasu zakupu.
+   Żaden z nich nie jest sekwencyjny.
+10. **PostgreSQL** — indeksy częściowe i `EXCLUDE` (patrz wyżej).
+11. **Atomowość blokad na indeksie UNIQUE**, a nie na `SELECT ... FOR UPDATE`
+    ani Redis `SETNX` (szczegóły w Etapie 2).
+12. **Blokowanie all-or-nothing, `seat_id` sortowane rosnąco** — brak deadlocków
+    i brak częściowo zajętych koszyków.
+13. **Serwisy rzucają wyjątki domenowe**, a nie zwracają odpowiedzi HTTP; jedno
+    miejsce tłumaczy je na JSON.
 
 ## Dane testowe
 
 Seeder tworzy 3 kina w różnych miastach, 7 sal w trzech układach (z przejściami,
 strefą Premium, rzędem VIP w sali IMAX, kanapami dla par w ostatnim rzędzie
-i miejscami dla osób z niepełnosprawnością przy wejściu), 8 filmów oraz
-repertuar od 2 dni wstecz do 13 dni w przód wraz z cennikami.
+i miejscami dla osób z niepełnosprawnością przy wejściu), 8 filmów,
+repertuar od 2 dni wstecz do 13 dni w przód wraz z cennikami oraz jedno konto
+obsługi na każde kino.
 
 Ceny są wyliczane z ceny bazowej kategorii przez mnożniki: weekend +20%,
 seans wieczorny +15%, poranek −20%, 3D ×1,15, IMAX ×1,35.
@@ -89,14 +214,16 @@ zaufanie do kodu.
 - **Projekt związany z PostgreSQL.** Konsekwencja użycia indeksów częściowych
   i `EXCLUDE`; przenośność na inny silnik nie była celem.
 
+Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
+
 ## Stan prac
 
 - [x] Etap 0 — Docker Compose, szkielet Laravela
 - [x] Etap 1 — model danych, migracje, modele Eloquent, seeder
-- [ ] Etap 2 — blokowanie miejsc i test współbieżności
-- [ ] Etap 3 — REST API ścieżki zakupowej
-- [ ] Etap 4 — Stripe, webhook, obsługa wyścigu przy płatności
-- [ ] Etap 5 — bilety, QR, PDF, kolejki, mail
+- [x] Etap 2 — blokowanie miejsc i test współbieżności
+- [x] Etap 3 — REST API ścieżki zakupowej
+- [x] Etap 4 — Stripe, webhook, obsługa wyścigu przy płatności
+- [x] Etap 5 — bilety, QR, PDF, kolejki, mail, scheduler
 - [ ] Etap 6 — WebSocket (Laravel Reverb)
 - [ ] Etap 7 — panel administracyjny (Livewire)
 - [ ] Etap 8 — frontend Vue 3
@@ -328,9 +455,9 @@ SEAT_LOCK_SWEEP_BATCH=500            # rozmiar porcji przy czyszczeniu
   w Etapie 3. Wtedy dojdzie `FormRequest`, mapowanie wyjątków na JSON w
   `bootstrap/app.php`, rate limiting na endpointach blokowania i przekazywanie
   identyfikatora sesji nagłówkiem.
-- **Kontener `scheduler` jeszcze nie istnieje** — komenda `cinema:seat-locks:sweep`
-  jest zarejestrowana i przetestowana, ale nic nie wywołuje `schedule:run` co minutę.
-  Kontener dojdzie razem z workerem kolejek w Etapie 5.
+- ~~Kontener `scheduler` jeszcze nie istnieje~~ — **rozwiązane w Etapie 5**:
+  kontener `scheduler` uruchamia `schedule:work`, a `cinema:seat-locks:sweep`
+  wykonuje się co minutę.
 - **Migracje nie uruchamiają się same** przy `docker compose up` — po starcie trzeba
   wykonać `php artisan migrate --seed`. Docelowo trafi to do entrypointu kontenera PHP.
 - **Brak broadcastu** — zmiana zajętości miejsca nie jest jeszcze rozgłaszana przez
@@ -534,6 +661,8 @@ Testy integracyjne sprawdzają kontrakt API, nie implementację: status HTTP,
 pole `code` błędu i kształt `data`. Dzięki temu refaktoryzacja serwisu nie
 wymaga przepisywania testów, a zmiana kontraktu od razu je czerwieni.
 
+---
+
 ## Etap 4 — płatności Stripe, webhook, wyścig przy płatności
 
 Ścieżka zakupowa działa od kliknięcia miejsca do pobrania pieniędzy:
@@ -724,3 +853,477 @@ przechodzi przez prawdziwy kod, bo test atrapy kryptografii niczego nie dowodzi.
   obciążenie i zwrot, a nie tylko blokadę środków.
 - `capture` wołamy synchronicznie w obsłudze webhooka; po wdrożeniu kolejek
   (Etap 5) naturalne będzie przeniesienie go do zadania w tle.
+  Po Etapie 5 świadomie zostało synchronicznie — uzasadnienie w sekcji Etapu 5.
+
+---
+
+## Etap 5 — bilety, kody QR, PDF, kolejki, mail, scheduler
+
+Po opłaceniu rezerwacji klient dostaje e-mail z PDF-em (jeden bilet na stronę,
+każdy z kodem QR), może pobrać PDF i pojedyncze kody z historii zakupów,
+a obsługa kina skanuje bilety przy wejściu. Wszystko, co wolne albo zawodne
+(render PDF, SMTP), dzieje się w tle — webhook Stripe'a nie czeka na pocztę.
+
+Powstały: kontenery `worker`, `scheduler` i `mailpit`, warstwa `app/Tickets`
+(podpis tokenu, obraz QR, PDF, zapis PDF-ów), `app/Queue/RetryPolicy`,
+zdarzenie `BookingPaid`, zadanie `GenerateBookingTicketsPdf`, powiadomienia
+`BookingConfirmed` i `ScreeningReminder`, endpointy pobierania i walidacji
+biletów, rola obsługi kina, trzy nowe komendy harmonogramu i 67 testów.
+
+### Przepływ po płatności
+
+```mermaid
+sequenceDiagram
+    participant S as Stripe
+    participant W as Webhook (PHP-FPM)
+    participant Q as Redis (kolejka)
+    participant K as Worker
+    participant M as SMTP (Mailpit)
+    S->>W: payment_intent.amount_capturable_updated
+    W->>W: bilety w transakcji, capture
+    W->>W: BookingPaid (po COMMIT)
+    W->>Q: GenerateBookingTicketsPdf
+    W-->>S: 200 OK
+    Q->>K: zadanie
+    K->>K: render PDF, zapis atomowy
+    K->>Q: BookingConfirmed (powiadomienie w kolejce)
+    Q->>K: powiadomienie
+    K->>M: e-mail z PDF-em
+    K->>K: NotificationSent → confirmation_sent_at
+```
+
+1. `PaymentService` emituje `BookingPaid` **wyłącznie po udanym capture**
+   (albo po wystawieniu biletów dla płatności pobranej automatycznie) —
+   jedno źródło prawdy zamiast nasłuchiwania na zmianę kolumny `status`.
+2. Zdarzenie implementuje `ShouldDispatchAfterCommit`: gdyby transakcja się
+   wycofała, worker nie dostanie zadania dla rezerwacji, której w bazie nie ma.
+3. Listener `QueueBookingConfirmation` jest synchroniczny i robi tylko
+   `dispatch()` (milisekundy). Błąd kolejki łapie i loguje — **webhook zawsze
+   odpowiada 2xx**, bo bilety już istnieją, a pieniądze są pobrane.
+   Ponowienie zdarzenia przez Stripe'a niczego by nie naprawiło; naprawia to
+   komenda ponawiająca potwierdzenia (niżej).
+4. `GenerateBookingTicketsPdf` renderuje i zapisuje PDF, po czym wysyła
+   powiadomienie. Zadanie jest idempotentne (`ShouldBeUnique` po id rezerwacji,
+   zapis przez plik tymczasowy i `move`).
+5. `BookingConfirmed` jest powiadomieniem w kolejce z własnym `shouldSend()`:
+   nie wyśle się dla rezerwacji nieopłaconej ani już potwierdzonej.
+6. Listener `MarkBookingConfirmationSent` na `NotificationSent` ustawia
+   `confirmation_sent_at` dopiero po faktycznym wysłaniu.
+
+### Kolejka: Redis, nie RabbitMQ
+
+| Kryterium | **Redis** | RabbitMQ |
+|---|---|---|
+| Nowy element infrastruktury | nie — Redis już jest (cache, limitery, zamki) | nowy broker, konfiguracja, monitoring |
+| Sterownik w Laravelu | wbudowany, Horizon w przyszłości | pakiet zewnętrzny |
+| Opóźnienia (backoff) | natywnie (sorted set) | wtyczka `delayed_message_exchange` |
+| `ShouldBeUnique`, `onOneServer`, `withoutOverlapping` | ten sam Redis jako magazyn zamków | i tak potrzebny Redis |
+| Routing, wielu konsumentów, gwarancje potwierdzeń | podstawowe | mocna strona |
+
+Rozstrzyga skala i koszt: kilkadziesiąt e-maili na minutę w szczycie premiery
+to nic dla Redisa, a zamki dla harmonogramu i unikalnych zadań i tak w nim
+żyją. RabbitMQ miałby sens przy wielu usługach wymieniających zdarzenia.
+Ryzyko Redisa — utrata zadań przy restarcie — ogranicza włączony AOF.
+
+### Ponawianie i nieudane zadania
+
+Wszystkie zadania i powiadomienia korzystają z `RetryPolicy` (trait
+`UsesRetryPolicy`):
+
+| Parametr | Wartość | Dlaczego |
+|---|---|---|
+| Maksymalna liczba prób | 3 | wymóg zadania; SMTP, który nie działa trzy razy z rzędu, wymaga człowieka |
+| Opóźnienia | 10 s, potem 40 s (podstawa 10 s, mnożnik 4) | wykładniczo: chwilowa czkawka mija po 10 s, restart usługi po minucie |
+| Rozrzut (jitter) | ±20% | po awarii SMTP setki zadań nie wracają w tej samej sekundzie |
+| `--timeout` workera | 60 s | zabija zawieszone zadanie |
+| `retry_after` Redisa | 90 s | musi być **większe** niż timeout, inaczej zadanie wykona się dwa razy równolegle |
+| `stop_grace_period` | 75 s | przy restarcie kontenera bieżące zadanie zdąży się skończyć |
+
+`$tries` jest **właściwością**, a `backoff()` **metodą**: powiadomienia
+i mailable w kolejce ignorują metodę `tries()` (pułapka Y).
+
+Po trzeciej porażce zadanie trafia do `failed_jobs`, a `Queue::failing`
+(w `QueueServiceProvider`) zapisuje wpis `error` z klasą zadania, UUID,
+kolejką i **klasą** wyjątku — bez jego komunikatu, bo komunikat błędu SMTP
+potrafi zawierać adres e-mail klienta. Pełny ślad zostaje w `failed_jobs`.
+
+```bash
+docker compose exec php php artisan queue:failed        # lista
+docker compose exec php php artisan queue:retry all     # ponowienie po naprawie
+```
+
+### Kod QR — co jest w środku
+
+```text
+T1.9b2f4c1e-3a7d-4e8b-9c0f-1a2b3c4d5e6f.Xq3vB9kLmN0pR2sT
+│  │                                    └─ 12 bajtów HMAC-SHA256, base64url
+│  └─ tickets.code (UUID v4)
+└─ wersja formatu
+```
+
+Rozważone warianty:
+
+| Wariant | Problem |
+|---|---|
+| Sam UUID | każdy ciąg w formacie UUID trafia do bazy; brak wersjonowania |
+| JWT z danymi biletu | długi (gęsty QR, gorzej czytelny z pękniętego ekranu telefonu), dane osobowe i miejsce w kodzie, zmiana seansu unieważnia wydruk |
+| URL do API | skaner obsługi nie jest przeglądarką; adres zdradza infrastrukturę |
+| **`T1.{uuid}.{mac}`** | krótki, podpisany, bez danych osobowych; stan biletu zawsze z bazy |
+
+- **Podpis** odrzuca podrobione i zniekształcone kody bez zapytania do bazy
+  (`hash_equals`, stały czas porównania).
+- **Osobny klucz `TICKET_QR_KEY`**, nie `APP_KEY`: rotacja klucza aplikacji
+  (sesje, szyfrowanie) nie może unieważnić sprzedanych biletów. Brak wartości
+  domyślnej — aplikacja bez klucza odmawia wystawienia biletu, zamiast podpisać
+  go pustym ciągiem. `phpunit.xml` ma własny klucz testowy.
+- **MAC skrócony do 12 bajtów (96 bitów).** Weryfikacja jest wyłącznie online,
+  za limiterem 120 prób na minutę, więc zgadnięcie podpisu jest niewykonalne.
+  Skrót ma konkretny powód: token ma 56 znaków i mieści się w **QR wersji 6**
+  (41×41 modułów). Przy pełnym MAC-u kod przechodził do wersji 7, która ma
+  wzorzec wyrównania dokładnie na środku — pod logo. Test dekodujący obraz
+  (`zbarimg`) padał, choć korekcja błędów teoretycznie powinna to wytrzymać.
+- **Prefiks `T1`** zostawia miejsce na `T2` z podpisem Ed25519, gdyby skanery
+  miały działać offline (klucz publiczny w skanerze zamiast sekretu HMAC).
+
+Parametry obrazu (`endroid/qr-code` 6): korekcja błędów **High** (30%), logo
+na 20% szerokości z wyciętym tłem, margines 10% (strefa ciszy), kodowanie
+ISO-8859-1 (token jest czystym ASCII, a nagłówek ECI dla UTF-8 myli część
+starszych skanerów), 480 px.
+
+Kod biletu nie pojawia się w URL-ach, odpowiedziach API ani jako tekst w PDF-ie
+— jedynym nośnikiem jest obraz QR, a `TicketResource` zwraca `qr_url`.
+Test `TicketQrRendererTest` generuje PNG i **dekoduje go** `zbarimg`, bo test
+sprawdzający tylko nagłówek PNG przepuściłby nieczytelny kod.
+
+### PDF: dompdf
+
+| Biblioteka | Dlaczego nie |
+|---|---|
+| wkhtmltopdf / Snappy | projekt zarchiwizowany, binarka z nieaktualnym WebKitem |
+| Browsershot (Chromium) | kilkaset MB w obrazie, proces przeglądarki na każde zadanie |
+| mPDF | licencja GPL-2.0 |
+| **dompdf 3** | czysty PHP, LGPL, wystarczający CSS dla prostego układu biletu |
+
+- **Czcionka DejaVu Sans** — wbudowane czcionki PDF (Helvetica) nie mają
+  polskich znaków; zamiast „ą” byłoby „?”. Cache czcionek w `storage/fonts`.
+- **Bezpieczne opcje**: wyłączone zasoby zdalne, JavaScript i PHP w szablonie.
+  Tytuł filmu pochodzi z panelu admina; `<img src="http://...">` w opisie nie
+  może zamienić renderera w narzędzie do skanowania sieci wewnętrznej.
+- **Obrazy jako data URI** (QR i logo) — konsekwencja wyłączenia zasobów zdalnych.
+- **Jeden bilet na stronę A4**: każdy bilet da się wydrukować i wręczyć
+  osobno.
+- **Godziny w strefie czasowej kina**, liczone przez `BookingTicketsPresenter`.
+  Ten sam presenter przygotowuje dane dla PDF-a i treści e-maila, więc oba
+  kanały nie mogą się rozjechać.
+- **Zapis**: `storage/app/private/tickets`, najpierw plik tymczasowy, potem
+  `move` — pobierający nigdy nie dostanie połowy pliku. Gdy pliku brak
+  (worker jeszcze nie skończył, dysk wyczyszczony), `TicketPdfStore` renderuje
+  PDF w locie.
+
+### Poczta
+
+Mailpit w kontenerze przechwytuje całą pocztę (<http://localhost:8025>).
+Mailhog nie jest rozwijany od 2020 roku; Mailpit ma ten sam model pracy
+i API do testów.
+
+- `BookingConfirmed` — numer rezerwacji, seans, miejsca, PDF w załączniku
+  (`bilety-{reference}.pdf`).
+- `ScreeningReminder` — przypomnienie przed seansem, **bez załącznika**:
+  bilety klient już ma, a kilkusetkilobajtowy PDF wysłany drugi raz tylko
+  obciąża skrzynki i zwiększa ryzyko trafienia do spamu.
+
+Gwarancje dostarczenia są różne i świadomie dobrane:
+
+| Wiadomość | Gwarancja | Dlaczego |
+|---|---|---|
+| Potwierdzenie | **at-least-once** | brak biletów jest gorszy niż duplikat; worker, który padnie między SMTP a zapisem znacznika, wyśle je ponownie |
+| Przypomnienie | **at-most-once** | brak przypomnienia to drobiazg, dwa przypomnienia wyglądają na błąd systemu |
+
+### API biletów
+
+| Metoda | Ścieżka | Kto | Opis |
+|---|---|---|---|
+| GET | `/api/v1/bookings/{booking}/tickets/pdf` | właściciel rezerwacji | PDF ze wszystkimi biletami |
+| GET | `/api/v1/bookings/{booking}/tickets/{ticket}/qr` | właściciel rezerwacji | PNG kodu jednego biletu |
+| POST | `/api/v1/tickets/validate` | obsługa kina, administrator | skanowanie przy wejściu |
+
+- **Token Sanctum zamiast podpisanego URL-a.** Podpisany link zostaje w historii
+  przeglądarki, logach proxy i można go przesłać dalej — a PDF to bilety na
+  okaziciela. Aplikacja mobilna i tak ma token.
+- **`scopeBindings()`** — bilet jest szukany wyłącznie wśród biletów rezerwacji
+  z URL-a, więc id cudzego biletu daje 404, a nie cudzy kod QR.
+- Odpowiedzi z biletami mają `Cache-Control: private, no-store`.
+- Pobranie biletów rezerwacji, która nie jest opłacona: 409
+  `BOOKING_TICKETS_UNAVAILABLE`.
+- Limitery per użytkownik: `ticket-downloads` 30/min, `ticket-validation`
+  120/min (bramka przy dużej sali to ok. 1–2 skany na sekundę).
+
+#### Walidacja biletu
+
+Kolejność sprawdzeń jest celowa — tańsze i niezdradzające informacji najpierw:
+
+1. uprawnienie do seansu (policy `ScreeningPolicy::validateTickets`):
+   administrator wszędzie, obsługa tylko w swoim kinie → 403;
+2. format i podpis tokenu → 422 (bez zapytania do bazy);
+3. bilet istnieje → 404;
+4. bilet należy do skanowanego seansu → 409 z godziną właściwego seansu, żeby
+   obsługa mogła pokierować widza do innej sali;
+5. okno czasowe: od `TICKET_VALIDATION_OPENS_MINUTES` przed początkiem do końca
+   filmu (`ends_at`) → 409;
+6. **atomowy `UPDATE tickets SET status = 'used' … WHERE id = ? AND status = 'valid'`**;
+7. gdy `UPDATE` nie zmienił wiersza, serwis czyta bilet ponownie i zwraca
+   przyczynę: wykorzystany (z godziną pierwszego skanu) albo anulowany → 409.
+
+Status biletu jest sprawdzany **wynikiem `UPDATE`**, a nie wcześniejszym
+`SELECT`-em. Bramki przy dwóch wejściach skanujące ten sam zrzut ekranu
+jednocześnie przejdą kroki 1–5, ale tylko jeden `UPDATE` zmieni wiersz — drugi
+skaner dostaje „bilet już wykorzystany”. Sprawdzenie statusu przed `UPDATE`
+przepuściłoby oba.
+
+| Kod | HTTP | Znaczenie |
+|---|---:|---|
+| `TICKET_TOKEN_INVALID` | 422 | kod nie jest biletem tego systemu albo podpis się nie zgadza |
+| `TICKET_NOT_FOUND` | 404 | poprawny podpis, brak biletu (np. usunięty) |
+| `TICKET_WRONG_SCREENING` | 409 | bilet na inny seans |
+| `TICKET_CANCELLED` | 409 | bilet anulowany |
+| `TICKET_ALREADY_USED` | 409 | bilet już zeskanowany |
+| `TICKET_OUTSIDE_VALIDATION_WINDOW` | 409 | za wcześnie (w odpowiedzi `opens_at`) albo film się skończył (`ended_at`) |
+
+Wszystkie kody pochodzą z jednej klasy `TicketValidationException`
+z metodami fabrycznymi — skaner rozgałęzia się po `code`, a komunikat po polsku
+wyświetla obsłudze.
+
+### Rola obsługi kina
+
+Nowa wartość `UserRole::Staff` i kolumna `users.cinema_id`. Constraint
+`CHECK ((role = 'staff') = (cinema_id IS NOT NULL))` gwarantuje w bazie, że
+pracownik obsługi zawsze ma kino, a klient i administrator nie mają żadnego.
+Klucz obcy `restrictOnDelete` — kina z kontami obsługi nie da się usunąć
+niechcący. Seeder tworzy jedno konto obsługi na kino.
+
+### Harmonogram
+
+| Komenda | Częstość | Co robi |
+|---|---|---|
+| `cinema:seat-locks:sweep` | co minutę | zwalnia wygasłe blokady (Etap 2) |
+| `cinema:bookings:expire` | co minutę | wygasza nieopłacone rezerwacje (Etap 4) |
+| `cinema:screenings:finish` | co 5 min | oznacza zakończone seanse jednym `UPDATE` |
+| `cinema:bookings:resend-confirmations` | co 15 min | ponawia brakujące potwierdzenia |
+| `cinema:screenings:send-reminders` | co 5 min | przypomnienia przed seansem |
+
+Każde zadanie ma `withoutOverlapping()`, `onOneServer()` (zamek w Redisie —
+przy dwóch replikach schedulera nic nie wykona się dwa razy),
+`runInBackground()` i `appendOutputTo()`. Wyjście trafia do `/proc/1/fd/2`
+kontenera, czyli do `docker compose logs scheduler`; domyślne `/dev/null`
+ukrywało błędy komend (pułapka V).
+
+**Ponawianie potwierdzeń.** Komenda bierze rezerwacje opłacone **15–120 minut
+temu** bez `confirmation_sent_at` (indeks częściowy
+`bookings_confirmation_pending`). Dolna granica daje zwykłej ścieżce czas na
+trzy próby z backoffem; górna nie pozwala, żeby po tygodniowej awarii SMTP
+klienci dostali potwierdzenia do seansów, które już się odbyły. Po dłuższej
+awarii jest `--all`.
+
+**Przypomnienia.** Rezerwacja jest **najpierw zajmowana** jednym zapytaniem
+`UPDATE bookings … SET reminder_sent_at = now() FROM screenings … RETURNING id`,
+a dopiero potem powiadomienie trafia do kolejki. Dwa równoległe przebiegi nie
+wyślą dwóch przypomnień (stąd at-most-once). Pomijane są:
+
+- seanse, które już się zaczęły,
+- rezerwacje opłacone już po momencie przypomnienia — klient właśnie dostał
+  potwierdzenie, drugi e-mail minutę później byłby spamem.
+
+`ScreeningReminder::shouldSend()` sprawdza jeszcze raz status rezerwacji
+i seansu w chwili wysyłki (seans mógł zostać odwołany, gdy zadanie czekało).
+
+### Infrastruktura
+
+```text
+php        PHP-FPM, obsługa HTTP
+worker     php artisan queue:work redis --timeout=60 --tries=3 --sleep=3 --max-time=3600
+scheduler  php artisan schedule:work
+mailpit    SMTP :1025, interfejs :8025
+```
+
+- `worker` i `scheduler` używają tego samego obrazu (kotwica `x-php-app`
+  w `docker-compose.yml`) i działają jako `www-data` (uid 82), nie root.
+- `--max-time=3600` — worker kończy się co godzinę, a Docker go wznawia;
+  wycieki pamięci w długo żyjącym procesie nie narastają.
+- **Worker trzyma kod w pamięci** — po zmianie kodu
+  `docker compose restart worker scheduler` (pułapka N).
+- Obraz PHP zawiera `zbar` i `imagemagick` wyłącznie na potrzeby testu
+  dekodującego QR.
+
+### Konfiguracja
+
+| Zmienna | Domyślnie | Znaczenie |
+|---|---|---|
+| `QUEUE_CONNECTION` | `redis` | |
+| `REDIS_QUEUE_RETRY_AFTER` | `90` | sekundy; musi być większe niż `--timeout` workera |
+| `MAIL_HOST` / `MAIL_PORT` | `mailpit` / `1025` | |
+| `MAIL_FROM_ADDRESS` / `MAIL_FROM_NAME` | `bilety@cinema.test` / `Kino - bilety` | |
+| `TICKET_QR_KEY` | **brak** | klucz podpisu QR, `openssl rand -hex 32` |
+| `TICKET_VALIDATION_OPENS_MINUTES` | `60` | ile minut przed seansem obsługa może skanować |
+| `CONFIRMATION_RETRY_AFTER_MINUTES` | `15` | dolna granica okna ponawiania potwierdzeń |
+| `CONFIRMATION_RETRY_WINDOW_MINUTES` | `120` | górna granica |
+| `SCREENING_REMINDER_MINUTES` | `120` | ile minut przed seansem wysłać przypomnienie |
+| `SCHEDULE_OUTPUT` | `/dev/null` | w Compose `/proc/1/fd/2` |
+
+Parametry obrazu QR i PDF-a są w `config/tickets.php`.
+
+### Etap 5 — decyzje projektowe (46–90)
+
+46. **Redis jako kolejka**, nie RabbitMQ — brak nowego brokera, zamki w tym samym Redisie.
+47. **Token `T1.{uuid}.{mac}`** — krótki, podpisany, wersjonowany, bez danych osobowych.
+48. **dompdf** — czysty PHP, LGPL, bez przeglądarki w obrazie.
+49. **endroid/qr-code** — generowanie po stronie serwera, logo, pełna kontrola ECC.
+50. **Mailpit** zamiast nierozwijanego Mailhoga.
+51. **Rola `staff` z `cinema_id` i policy** zamiast osobnej tabeli uprawnień.
+52. **Osobny kod błędu dla każdego wyniku walidacji** — skaner pokazuje obsłudze konkretną przyczynę.
+53. **Zdarzenie `BookingPaid`** oddziela płatności od biletów i poczty.
+54. **Łańcuch zadanie → powiadomienie** — PDF powstaje raz, e-mail tylko go dołącza.
+55. **PDF zapisany na dysku z renderem awaryjnym** — szybkie pobieranie, brak zależności od workera.
+56. **`RetryPolicy` + `Queue::failing`** — jedna polityka ponowień i jeden log porażek.
+57. **`reminder_sent_at` zajmowany atomowo** przed wysłaniem.
+58. **Powiadomienie dopiero po capture, odbiorca idempotentny.**
+59. **Worker i scheduler jako uid 82, zapisy przez atomowy `move`.**
+60. **Kod biletu usunięty z URL-i i odpowiedzi API** — jedynym nośnikiem jest obraz QR.
+61. **`$tries` jako właściwość, `backoff()` jako metoda** (pułapka Y).
+62. **Log porażki bez komunikatu wyjątku** — komunikat może zawierać dane osobowe.
+63. **Osobny `TICKET_QR_KEY`, bez wartości domyślnej, własny klucz w `phpunit.xml`.**
+64. **Parametry QR**: ECC High, logo 20%, margines 10%, ISO-8859-1.
+65. **Test dekoduje obraz QR**, zamiast sprawdzać nagłówek PNG.
+66. **MAC 12 bajtów → QR wersji 6** bez wzorca wyrównania pod logo.
+67. **Renderer PDF dostaje gotowe teksty** z presentera; szablon nie liczy stref czasowych.
+68. **Jeden bilet na stronę, bez kodu jako tekstu.**
+69. **Bezpieczne opcje dompdf** — bez zasobów zdalnych, JS i PHP.
+70. **Znaczniki `confirmation_sent_at` / `reminder_sent_at` + indeks częściowy.**
+71. **`users.cinema_id` z `restrictOnDelete`.**
+72. **`BookingPaid` emitowane tylko przez `PaymentService`**, we wszystkich trzech gałęziach kończących się opłaceniem.
+73. **Listener synchroniczny z `try/catch`**; webhook zawsze 2xx po wystawieniu biletów.
+74. **Zadanie PDF idempotentne, unikalne i atomowe.**
+75. **Powiadomienie w kolejce z `shouldSend()`**, gwarancja at-least-once.
+76. **`BookingTicketsPresenter` wspólny dla PDF-a i e-maila.**
+77. **Katalog `tickets` z uprawnieniami dla wszystkich** — PHP-FPM i worker mają różne uid (pułapka AB).
+78. **Token Sanctum zamiast podpisanego URL-a** do pobierania biletów.
+79. **Bilet w URL-u ograniczony do rezerwacji (`scopeBindings`)**, klucz trasy = `id`.
+80. **Kolejność walidacji od najtańszej + atomowy `UPDATE`** rozstrzygający wyścig skanerów.
+81. **Jedna klasa wyjątku walidacji z metodami fabrycznymi.**
+82. **Limitery per użytkownik** dla pobierania i walidacji.
+83. **`qr_url` w `TicketResource` zamiast kodu.**
+84. **Wyjście harmonogramu do logów kontenera.**
+85. **`onOneServer()`** na wszystkich zadaniach harmonogramu.
+86. **Kończenie seansów jednym `UPDATE`**, bez ładowania modeli.
+87. **Ponawianie potwierdzeń w oknie 15–120 min, co 15 min.**
+88. **Commit po każdym bloku pracy** — łatwy powrót zamiast kopii w `/tmp`.
+89. **Przypomnienia at-most-once**, z oknem czasowym i pomijaniem spóźnionych płatności.
+90. **Przypomnienie bez PDF-a.**
+
+### Etap 5 — pułapki, na które trafiliśmy (N–AH)
+
+- **N. Worker trzyma kod w pamięci.** Zmiana w klasie zadania nie działa, dopóki
+  nie zrestartuje się kontenera `worker`.
+- **O. `retry_after` musi być większe niż `--timeout`.** Inaczej Redis oddaje
+  trwające zadanie drugiemu procesowi i wykonuje się ono równolegle dwa razy.
+- **P. Pliki tworzone przez `docker compose exec` należą do roota.** Katalogi
+  zakładamy w WSL jako zwykły użytkownik.
+- **Q. W `phpunit.xml` kolejka jest `sync`.** `dispatch()` wykonuje zadanie od
+  razu, w środku testowanej akcji; testy przepływu używają `Queue::fake()`.
+- **R. `preventLazyLoading()` działa też w workerze.** Powiadomienie sięgające
+  po niezaładowaną relację rzuca wyjątek dopiero w tle — relacje ładujemy jawnie.
+- **S. Reguła nginx dla plików statycznych** — sprawdzone, nie dotyczy: ścieżki
+  `/tickets/pdf` i `/qr` nie mają rozszerzeń, więc trafiają do PHP.
+- **T. Czcionki dompdf.** Wbudowane czcionki nie mają polskich znaków, a katalog
+  cache czcionek musi być zapisywalny dla workera.
+- **U. `schedule:list` pokazuje zadania, ale ich nie uruchamia.** Potrzebny jest
+  `schedule:work` (albo cron z `schedule:run`).
+- **V. Wyjście schedulera domyślnie idzie do `/dev/null`.** Błąd komendy był
+  niewidoczny, dopóki wyjście nie trafiło do logów kontenera.
+- **W. Pływający tag obrazu bazowego.** Przebudowa pobrała nowszy obraz PHP
+  i trwała prawie 4 minuty zamiast kilku sekund.
+- **X. Domknięcia z `tinker --execute` nie da się zserializować** do kolejki
+  (kod z `eval`). Do testów workera powstała klasa `QueueProbeJob`.
+- **Y. Powiadomienia i mailable ignorują metodę `tries()`.** Liczbę prób trzeba
+  podać właściwością `$tries`.
+- **Z. Nieistniejący pakiet.** Dekoder QR proponowany jako zależność PHP nie
+  jest na Packagist — sprawdzać przed `composer require`. Zastąpił go `zbarimg`.
+- **Z2. `zbarimg` bez `imagemagick` nie czyta PNG** (`NoDecodeDelegate`).
+- **Z3. Logo zasłania środkowy wzorzec wyrównania QR wersji 7.** Rozwiązanie:
+  krótszy token i wersja 6 (decyzja 66).
+- **AA. Błąd wewnątrz `$(...)` nie przerywa łańcucha `&&`.** Pusty wynik
+  `cat` szedł dalej jako pusty skrypt; pomaga `test -s plik &&`.
+- **AB. Flysystem zapisuje „prywatne” pliki z prawami 0700/0600.** Plik
+  utworzony przez worker (uid 82) był nieczytelny dla innego procesu.
+- **AC. Dysk z `throw => false` zwraca `false` zamiast rzucać wyjątek.**
+  Wynik `put()` / `move()` trzeba sprawdzać jawnie.
+- **AD. `PendingDispatch` wysyła zadanie w destruktorze.** Wyjątek kolejki
+  wylatywał poza `try`; pomaga `unset()` wewnątrz bloku `try`.
+- **AE. `ShouldBeUnique` zakłada zamek także przy `Queue::fake()`.** Drugi
+  dispatch w tym samym teście był po cichu pomijany.
+- **AF. `/tmp` w WSL znika po restarcie.** Kopie zapasowe zastępuje `git diff`.
+- **AG. `git diff` nie pokazuje plików nieśledzonych** — do tego `git status`.
+- **AH. PDO pgsql nie przyjmuje dwa razy tego samego parametru nazwanego.**
+  W surowym `UPDATE … RETURNING` użyte są parametry pozycyjne `?`.
+
+### Etap 5 — testy
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `RetryPolicyTest` (Unit) | 4 | liczba prób, wykładnicze opóźnienia, granice rozrzutu |
+| `TicketTokenSignerTest` (Unit) | 14 | format, determinizm, podmiana UUID, inny klucz, zmieniona wersja, zniekształcone tokeny (data provider), brak klucza |
+| `TicketQrRendererTest` | 4 | **dekodowanie obrazu z logo przez `zbarimg`**, kwadratowy PNG, data URI, brak pliku logo |
+| `TicketPdfRendererTest` | 5 | strefa czasowa kina, miejsca i QR w kolejności, brak kodu jako tekstu, strona na bilet, nieopłacona rezerwacja |
+| `StaffCinemaConstraintTest` | 3 | constraint roli i kina w bazie |
+| `BookingConfirmationFlowTest` | 6 | `BookingPaid` dopiero po capture, brak drugiego ogłoszenia, ponowienie po awarii capture, BLIK, nieudana płatność, utrata miejsc |
+| `GenerateBookingTicketsPdfTest` | 6 | zapis PDF i zlecenie e-maila, pominięcie nieopłaconej i już potwierdzonej, załącznik bez kodów, znacznik blokujący ponowną wysyłkę, polityka ponowień |
+| `TicketDownloadTest` | 7 | PDF i QR właściciela, cudzy PDF, brak logowania, nieopłacona, bilet z innej rezerwacji → 404, `qr_url` zamiast kodu |
+| `TicketValidationTest` | 10 | wpuszczenie, drugi skan, inny seans, podrobiony kod, anulowany, przed otwarciem wejścia, obsługa innego kina, klient, administrator, brak logowania |
+| `FinishScreeningsCommandTest` | 2 | tylko zaplanowane seanse po końcu filmu, ponowne uruchomienie |
+| `ResendBookingConfirmationsCommandTest` | 2 | okno ponawiania, `--all` |
+| `SendScreeningRemindersCommandTest` | 4 | tylko opłacone w oknie, brak ponownej wysyłki, godzina w strefie kina bez kodu, anulowanie przed wysyłką |
+| Etapy 1–4 | 74 | (w tym `StripeWebhookTest` i `PaymentRaceTest` z `Queue::fake()`) |
+| **Razem** | **141** | |
+
+### Etap 5 — weryfikacja na żywo
+
+Poza testami automatycznymi sprawdzone ręcznie na działającym środowisku:
+
+- płatność testowa przez Stripe CLI → webhook → bilety → capture;
+- zadanie celowo padające: trzy próby z opóźnieniami ok. 10 s i 40 s, wpis
+  w `failed_jobs` i w logu workera;
+- kod QR odczytany przez `zbarimg` i aparat telefonu;
+- PDF: `pdftotext` (polskie znaki), `pdffonts` (osadzona DejaVu Sans);
+- e-mail z załącznikiem w Mailpit; ponowny dispatch nie wysłał duplikatu;
+- pobranie PDF-a i QR przez `curl` z tokenem właściciela i odmowa dla innego
+  użytkownika;
+- dwa równoległe skany tego samego biletu: jeden sukces, jeden
+  „już wykorzystany”;
+- logi komend harmonogramu w `docker compose logs scheduler`;
+- odzyskanie potwierdzenia komendą ponawiającą po zatrzymanym workerze.
+
+### Etap 5 — znane ograniczenia i co dalej
+
+- **`capture` nadal synchronicznie w webhooku** (zapowiedź z Etapu 4). Świadomie:
+  capture musi nastąpić tuż po wystawieniu biletów, a ponowienia zapewnia sam
+  Stripe. Przeniesienie do kolejki dodałoby stan „bilety są, pieniędzy jeszcze
+  nie” bez realnego zysku przy czasie capture rzędu kilkuset milisekund.
+- **Duplikat potwierdzenia jest możliwy** (at-least-once), przypomnienie może
+  nie dojść (at-most-once) — patrz tabela gwarancji.
+- **Brak zgody klienta na przypomnienia** — dziś dostaje je każdy. Docelowo
+  preferencja w profilu; push (FCM) dojdzie z aplikacją mobilną.
+- **Weryfikacja kodu tylko online.** Skanowanie offline wymagałoby tokenu `T2`
+  z podpisem asymetrycznym i synchronizacji listy wykorzystanych biletów.
+- **Brak ręcznego wpisania kodu** przy uszkodzonym ekranie — obsługa może
+  wyszukać rezerwację po numerze w panelu (Etap 7).
+- **Pracownik obsługi przypisany do jednego kina.** Obsługa kilku kin
+  wymagałaby tabeli łączącej.
+- **PDF-y na dysku lokalnym.** Przy kilku replikach PHP potrzebny jest S3 lub
+  inny wspólny dysk; `TicketPdfStore` jest jedynym miejscem do zmiany.
+- **Jeden Redis dla cache i kolejki, bez limitu `maxmemory`.** Dziś rośnie do
+  granic pamięci hosta. Docelowo osobne instancje: cache z limitem i `allkeys-lru`,
+  kolejka z `noeviction`, żeby wypychanie kluczy nigdy nie usunęło zadania.
+- **`zbar` i `imagemagick` w obrazie produkcyjnym** — do usunięcia przez
+  wieloetapowy Dockerfile (Etap 10), razem z przypięciem obrazu bazowego do
+  konkretnej wersji.
+- **Migracje i restart workera nie są automatyczne** — trafią do entrypointu
+  w Etapie 10.
