@@ -26,7 +26,9 @@ use LogicException;
  * jedna transakcja zmienia kilka seansów (sweep), podbija liczniki rosnąco
  * po screening_id — ta sama zasada co sortowanie seat_id w Etapie 2.
  *
- * W bloku F dojdzie tu rejestracja zdarzenia WebSocket po COMMIT.
+ * ROZGŁOSZENIE (blok F): po podbiciu licznika rejestrujemy wysyłkę zdarzenia
+ * przez DB::afterCommit. Po ROLLBACK callback przepada, więc klient nigdy
+ * nie zobaczy "ducha" zmiany, której w bazie nie ma.
  */
 final class SeatStateRecorder
 {
@@ -37,6 +39,10 @@ final class SeatStateRecorder
     public const SOLD = SeatMapService::STATUS_SOLD;
 
     private const STATUSES = [self::FREE, self::HELD, self::SOLD];
+
+    public function __construct(
+        private readonly RealtimeNotifier $realtime,
+    ) {}
 
     /**
      * Rejestruje zmianę stanu miejsc seansu i zwraca jej numer wersji.
@@ -83,7 +89,14 @@ final class SeatStateRecorder
             [$screeningId],
         );
 
-        return (int) $row->version;
+        $version = (int) $row->version;
+
+        // Wysyłka DOPIERO po COMMIT (Etap 6, blok F). Nie trzymamy w transakcji
+        // żądania HTTP do Reverba: blokady wierszy (w tym licznika) zwalniają
+        // się od razu, a awaria Reverba nie może wycofać zapisanej zmiany.
+        DB::afterCommit(fn () => $this->realtime->seatsChanged($screeningId, $version, $changes));
+
+        return $version;
     }
 
     /** Aktualna wersja stanu miejsc seansu; 0, gdy nic się jeszcze nie zmieniło. */

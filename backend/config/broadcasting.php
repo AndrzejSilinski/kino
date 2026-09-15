@@ -19,6 +19,15 @@ return [
 
     'default' => env('BROADCAST_CONNECTION', 'null'),
 
+    /*
+     * Górny limit rozmiaru payloadu zdarzenia (JSON, w bajtach). Reverb
+     * przyjmuje żądanie publikacji do REVERB_MAX_REQUEST_SIZE (domyślnie
+     * 10 000 bajtów), a payload jest w nim zakodowany jako napis JSON razem
+     * z nazwą zdarzenia i kanałów. 8000 zostawia zapas; większa zmiana
+     * idzie jako seats.resync (RealtimeNotifier).
+     */
+    'max_payload_bytes' => (int) env('BROADCAST_MAX_PAYLOAD_BYTES', 8000),
+
     'connections' => [
 
         'reverb' => [
