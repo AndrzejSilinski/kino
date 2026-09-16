@@ -1,31 +1,59 @@
 <script setup lang="ts">
 /*
- * Ekran startowy — w bloku E zamieni się w wybór kina.
- * Na razie pokazuje, że SPA rozmawia z API przez ten sam origin (nginx albo proxy Vite).
+ * Wybór kina (wymóg 3.1): lista pogrupowana po miastach, wybór zapamiętany w localStorage.
+ * Zapamiętane kino otwiera od razu repertuar (strażnik trasy "/"); "Zmień kino" prowadzi tu z ?change=1.
  */
-import { onMounted, ref } from 'vue';
-import { fetchClientConfig } from '@/api/clientConfig';
+import { onMounted } from 'vue';
+import { useRouter } from 'vue-router';
+import { useCinemaStore } from '@/stores/cinema';
+import { useLatestRequest } from '@/composables/useLatestRequest';
 
-const status = ref<'loading' | 'ok' | 'error'>('loading');
+const cinemas = useCinemaStore();
+const router = useRouter();
+const request = useLatestRequest<void>();
 
-onMounted(async () => {
-  try {
-    await fetchClientConfig();
-    status.value = 'ok';
-  } catch {
-    status.value = 'error';
-  }
-});
+function load(): Promise<void> {
+  return request.run(() => cinemas.loadCinemas(true));
+}
+
+async function choose(slug: string): Promise<void> {
+  cinemas.select(slug);
+  await router.push({ name: 'repertoire', params: { slug } });
+}
+
+onMounted(load);
 </script>
 
 <template>
   <section class="stack">
     <h1>Wybierz kino</h1>
-    <p>Repertuar i wybór kina pojawią się w kolejnym kroku budowy aplikacji.</p>
-    <p role="status" data-test="api-status">
-      <template v-if="status === 'loading'">Łączenie z serwerem…</template>
-      <template v-else-if="status === 'ok'">Połączenie z serwerem działa.</template>
-      <template v-else>Serwer jest chwilowo niedostępny. Spróbuj odświeżyć stronę.</template>
-    </p>
+
+    <p v-if="request.loading.value && !cinemas.loaded" role="status">Wczytywanie listy kin…</p>
+    <div v-else-if="request.errorMessage.value" role="alert" class="stack">
+      <p class="alert">{{ request.errorMessage.value }}</p>
+      <button type="button" @click="load">Spróbuj ponownie</button>
+    </div>
+
+    <template v-else>
+      <section v-for="group in cinemas.groups" :key="group.city" class="city-group" :aria-labelledby="`city-${group.city}`">
+        <h2 :id="`city-${group.city}`">{{ group.city }}</h2>
+        <ul class="cinema-list">
+          <li v-for="cinema in group.cinemas" :key="cinema.slug">
+            <button
+              type="button"
+              class="cinema-choice"
+              :aria-current="cinema.slug === cinemas.selectedSlug ? 'true' : undefined"
+              :data-test="`cinema-${cinema.slug}`"
+              @click="choose(cinema.slug)"
+            >
+              <span class="cinema-name">{{ cinema.name }}</span>
+              <span class="cinema-address">{{ cinema.address }}</span>
+              <span v-if="cinema.slug === cinemas.selectedSlug" class="cinema-badge">Twoje kino</span>
+            </button>
+          </li>
+        </ul>
+      </section>
+      <p v-if="cinemas.loaded && cinemas.groups.length === 0">Brak aktywnych kin.</p>
+    </template>
   </section>
 </template>

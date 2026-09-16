@@ -188,3 +188,205 @@ button:disabled {
 .details dd {
   margin: 0;
 }
+
+/* ─── Blok E: wybór kina, kalendarz, repertuar ────────────────────────── */
+.city-group h2 {
+  margin-bottom: 0.5rem;
+}
+
+.cinema-list,
+.calendar-days,
+.showtimes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.cinema-list {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+}
+
+.cinema-choice {
+  width: 100%;
+  display: grid;
+  gap: 0.25rem;
+  text-align: left;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 2px solid transparent;
+}
+
+.cinema-choice[aria-current='true'] {
+  border-color: var(--color-accent);
+}
+
+.cinema-name {
+  font-weight: 700;
+}
+
+.cinema-address {
+  color: var(--color-muted);
+  margin: 0;
+}
+
+.cinema-badge {
+  justify-self: start;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.cinema-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--space);
+}
+
+.cinema-header h1 {
+  margin: 0;
+}
+
+.calendar {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.calendar-days {
+  display: flex;
+  gap: 0.5rem;
+  padding-bottom: 0.25rem;
+}
+
+.calendar-day {
+  display: grid;
+  justify-items: center;
+  min-width: 3.5rem;
+  padding: 0.4rem 0.5rem;
+  background: var(--color-surface);
+  color: var(--color-text);
+  border: 2px solid transparent;
+}
+
+.calendar-day.is-selected {
+  border-color: var(--color-accent);
+  font-weight: 700;
+}
+
+.calendar-day.is-empty {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.calendar-weekday,
+.calendar-count {
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}
+
+.calendar-number {
+  font-size: 1.25rem;
+}
+
+.movie-list {
+  display: grid;
+  gap: var(--space);
+}
+
+.movie-card {
+  display: grid;
+  grid-template-columns: 5.5rem 1fr;
+  gap: var(--space);
+  padding: var(--space);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+@media (min-width: 40rem) {
+  .movie-card {
+    grid-template-columns: 7.5rem 1fr;
+  }
+}
+
+.poster {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: calc(var(--radius) / 2);
+}
+
+.poster-placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-muted);
+  background: var(--color-bg);
+}
+
+.movie-title {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.movie-meta {
+  margin: 0.25rem 0 0.75rem;
+  color: var(--color-muted);
+}
+
+.age-rating {
+  display: inline-block;
+  padding: 0 0.35rem;
+  margin-right: 0.35rem;
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.showtimes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.showtime {
+  display: grid;
+  min-width: 9rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--radius);
+  border: 2px solid var(--color-accent);
+  text-decoration: none;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+.showtime-time {
+  font-size: 1.15rem;
+  font-weight: 700;
+}
+
+.showtime-meta,
+.showtime-status {
+  font-size: 0.8rem;
+  color: var(--color-muted);
+}
+
+.showtime.is-few-left .showtime-status {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+/* Wyprzedany / rozpoczęty: wyszarzony, przekreślona godzina, tekst stanu i brak linku. */
+.showtime.is-disabled {
+  border-style: dashed;
+  border-color: var(--color-muted);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.day-heading::first-letter {
+  text-transform: uppercase;
+}

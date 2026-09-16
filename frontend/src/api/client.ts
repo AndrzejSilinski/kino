@@ -6,6 +6,7 @@
  */
 import { createAuthApi } from './auth';
 import { createBookingSessionStore } from './bookingSession';
+import { createCatalogApi } from './catalog';
 import { createHttpClient } from './http';
 
 let readToken: () => string | null = () => null;
@@ -25,3 +26,5 @@ export const http = createHttpClient({
 });
 
 export const authApi = createAuthApi(http);
+
+export const catalogApi = createCatalogApi(http);

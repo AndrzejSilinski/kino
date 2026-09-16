@@ -6,6 +6,7 @@
  * nie pobiera kodu planu sali ani Stripe'a.
  */
 import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
+import { readRememberedCinema } from '@/stores/cinema';
 
 export const routes: RouteRecordRaw[] = [
   {
@@ -13,6 +14,23 @@ export const routes: RouteRecordRaw[] = [
     name: 'home',
     component: () => import('@/views/HomeView.vue'),
     meta: { title: 'Wybierz kino' },
+    // Zapamiętane kino (wymóg 3.1) otwiera od razu repertuar; ?change=1 pokazuje listę kin.
+    beforeEnter: (to) => {
+      const remembered = readRememberedCinema();
+      return remembered && to.query.change === undefined ? { name: 'repertoire', params: { slug: remembered } } : true;
+    },
+  },
+  {
+    path: '/cinemas/:slug([a-z0-9-]+)',
+    name: 'repertoire',
+    component: () => import('@/views/RepertoireView.vue'),
+    meta: { title: 'Repertuar' },
+  },
+  {
+    path: '/screenings/:id(\\d+)/seats',
+    name: 'screening-seats',
+    component: () => import('@/views/ScreeningSeatsView.vue'),
+    meta: { title: 'Wybór miejsc' },
   },
   {
     path: '/login',
