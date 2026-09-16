@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\V1\BookingController;
 use App\Http\Controllers\Api\V1\BookingTicketsController;
 use App\Http\Controllers\Api\V1\BroadcastingAuthController;
 use App\Http\Controllers\Api\V1\CinemaController;
+use App\Http\Controllers\Api\V1\ClientConfigController;
 use App\Http\Controllers\Api\V1\MovieController;
 use App\Http\Controllers\Api\V1\ScreeningController;
 use App\Http\Controllers\Api\V1\SeatLockController;
@@ -42,6 +43,11 @@ Route::get('/ping', function () {
         ],
     ]);
 })->name('api.ping');
+
+// Etap 8, blok C: konfiguracja aplikacji klienckich w czasie działania (klucz publiczny
+// Reverba, limity koszyka). Tylko wartości jawne; bez logowania i bez sesji zakupowej.
+Route::get('/client-config', ClientConfigController::class)
+    ->name('api.client-config');
 
 // ─── 2. Konto ────────────────────────────────────────────────────────────
 Route::prefix('auth')->name('api.auth.')->group(function () {

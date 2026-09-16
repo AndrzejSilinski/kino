@@ -1,0 +1,84 @@
+/*
+ * Style bazowe (Etap 8, blok C): tokeny kolorów z trybem ciemnym, czytelność na telefonie,
+ * widoczny fokus dla nawigacji klawiaturą. Komponenty dostaną własne style w kolejnych blokach.
+ */
+:root {
+  --color-bg: #ffffff;
+  --color-surface: #f4f4f5;
+  --color-text: #18181b;
+  --color-muted: #52525b;
+  --color-accent: #1d4ed8;
+  --color-focus: #f59e0b;
+  --radius: 0.5rem;
+  --space: 1rem;
+  --max-width: 72rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.5;
+  color: var(--color-text);
+  background: var(--color-bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-bg: #0f0f12;
+    --color-surface: #1c1c21;
+    --color-text: #f4f4f5;
+    --color-muted: #a1a1aa;
+    --color-accent: #93b4ff;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+a {
+  color: var(--color-accent);
+}
+
+:focus-visible {
+  outline: 3px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+}
+
+.skip-link:focus {
+  left: var(--space);
+  top: var(--space);
+  padding: 0.5rem 1rem;
+  background: var(--color-surface);
+}
+
+.site-header,
+.site-main,
+.site-footer {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: var(--space);
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 1.25rem;
+  text-decoration: none;
+}
+
+.site-footer {
+  color: var(--color-muted);
+}
+
+.stack > * + * {
+  margin-top: var(--space);
+}

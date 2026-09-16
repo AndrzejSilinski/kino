@@ -2,6 +2,7 @@
 #   aplikacja: php (FPM), worker (kolejka), scheduler (harmonogram) — jeden obraz
 #   infrastruktura: nginx, postgres, redis, mailpit
 # Etap 6: reverb (WebSocket, Laravel Reverb) — publikacja z PHP, klienci przez nginx.
+# Etap 8: SPA klienta (Vue) — nginx serwuje frontend/dist; serwer Vite w profilu dev.
 
 # ----------------------------------------------------------------------
 # Wspólna definicja kontenerów z kodem aplikacji.
@@ -143,8 +144,50 @@ services:
     volumes:
       - ./backend:/var/www/html
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Etap 8: SPA z frontend/dist. Montujemy CAŁY katalog frontend/, a nie dist/:
+      # brakujący katalog wolumenu Docker tworzy jako root i "npm run build"
+      # nie mógłby potem do niego pisać.
+      - ./frontend:/var/www/frontend:ro
     depends_on:
       - php
+    networks:
+      - cinema
+
+  # ------------------------------------------------------------------
+  # Frontend - serwer deweloperski Vite (Etap 8), TYLKO w profilu "dev":
+  #   docker compose --profile dev up -d frontend    ->  http://localhost:5173
+  #
+  # Zwykłe "docker compose up" go nie uruchamia: SPA "jak produkcja" serwuje
+  # nginx z frontend/dist (npm run build) pod http://localhost:8080.
+  # Vite przekazuje /api/, /storage/ i WebSocket /app/ do nginx (vite.config.ts),
+  # więc dla przeglądarki to jeden origin — bez CORS.
+  #
+  # Obraz Node przypięty po digeście (pułapka W), ten sam co w tools/.
+  # user — pliki w frontend/ (node_modules, dist) należą do użytkownika WSL (zasada 6);
+  #   inny UID niż 1000: FRONTEND_UID i FRONTEND_GID w środowisku powłoki.
+  # npm ci tylko po zmianie package-lock.json (suma w node_modules/.etap8-lock);
+  #   --ignore-scripts: skrypty instalacyjne zależności się nie wykonują.
+  # ------------------------------------------------------------------
+  frontend:
+    image: node:22-alpine@sha256:c610fcdfb1d5b4740dd70c284ed3cb16bb857e0f7166196e36a5501df7a3aa32
+    container_name: cinema_frontend
+    profiles: ["dev"]
+    user: "${FRONTEND_UID:-1000}:${FRONTEND_GID:-1000}"
+    working_dir: /app
+    environment:
+      HOME: /tmp
+      VITE_PROXY_TARGET: http://nginx
+    command: >-
+      sh -c "sha256sum package-lock.json > /tmp/lock.sha
+      && (cmp -s /tmp/lock.sha node_modules/.etap8-lock
+      || (npm ci --ignore-scripts --no-fund --no-audit && cp /tmp/lock.sha node_modules/.etap8-lock))
+      && exec npm run dev"
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:5173"
+    depends_on:
+      - nginx
     networks:
       - cinema
 

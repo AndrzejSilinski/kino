@@ -1,0 +1,6 @@
+# Etap 8: zależności i wyniki budowania powstają w kontenerze Node, do gita trafia tylko package-lock.json.
+node_modules/
+dist/
+coverage/
+*.local
+.vite/
