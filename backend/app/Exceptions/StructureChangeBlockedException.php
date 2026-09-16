@@ -83,6 +83,45 @@ final class StructureChangeBlockedException extends CinemaException
         );
     }
 
+    /** Seans zakończony, odwołany albo już trwający — tylko do podglądu. */
+    public static function screeningNotEditable(): self
+    {
+        return new self(
+            'Tego seansu nie można już zmienić ani odwołać: jest odwołany, zakończony albo już się zaczął.',
+            'SCREENING_NOT_EDITABLE',
+            [],
+        );
+    }
+
+    /** @param array{locks: int, bookings: int, tickets: int} $activity */
+    public static function screeningHasSales(array $activity): self
+    {
+        return new self(
+            "Seans ma sprzedaż (blokady miejsc: {$activity['locks']}, rezerwacje: {$activity['bookings']}, bilety: {$activity['tickets']}) — godziny, sali, filmu i cen nie można już zmienić. Klienci kupili bilety na te warunki.",
+            'SCREENING_HAS_SALES',
+            $activity,
+        );
+    }
+
+    public static function screeningHasBookings(int $bookings): self
+    {
+        return new self(
+            "Seans ma rezerwacje oczekujące albo opłacone ({$bookings}). Najpierw je anuluj — z powodem i zwrotem pieniędzy.",
+            'SCREENING_HAS_BOOKINGS',
+            ['bookings' => $bookings],
+        );
+    }
+
+    /** Ktoś zmienił salę seansu między odczytem a blokadą — formularz jest nieaktualny. */
+    public static function screeningStale(): self
+    {
+        return new self(
+            'Seans został w międzyczasie zmieniony przez kogoś innego. Odśwież stronę i spróbuj ponownie.',
+            'SCREENING_STALE',
+            [],
+        );
+    }
+
     public static function hallNameTaken(string $name): self
     {
         return new self(

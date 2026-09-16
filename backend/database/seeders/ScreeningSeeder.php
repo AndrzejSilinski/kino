@@ -13,6 +13,7 @@ use App\Models\Movie;
 use App\Models\PriceCategory;
 use App\Models\Screening;
 use App\Models\ScreeningPrice;
+use App\Support\ScreeningTimeline;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Seeder;
 
@@ -44,8 +45,8 @@ class ScreeningSeeder extends Seeder
         $this->categoryIds = PriceCategory::pluck('id', 'slug')->all();
 
         $movies = Movie::active()->orderBy('id')->get();
-        $adsMinutes = (int) config('cinema.screening.ads_minutes');
-        $bufferMinutes = (int) config('cinema.screening.cleanup_buffer_minutes');
+        // Etap 7: ta sama oś czasu co panel i fabryka (reklamy + film + sprzątanie).
+        $timeline = ScreeningTimeline::fromConfig();
 
         foreach (Cinema::with('halls')->get() as $cinema) {
             foreach ($cinema->halls as $hall) {
@@ -60,18 +61,17 @@ class ScreeningSeeder extends Seeder
                         $projection = $this->pickProjection($hall);
                         $this->rotation++;
 
-                        $endsAt = $cursor->addMinutes($adsMinutes + $movie->duration_minutes);
-                        $slotEndsAt = $endsAt->addMinutes($bufferMinutes);
+                        $slot = $timeline->slot($cursor, $movie->duration_minutes);
 
                         $screening = Screening::create([
                             'movie_id' => $movie->id,
                             'hall_id' => $hall->id,
-                            'starts_at' => $cursor,
-                            'ends_at' => $endsAt,
-                            'slot_ends_at' => $slotEndsAt,
+                            'starts_at' => $slot->startsAt,
+                            'ends_at' => $slot->endsAt,
+                            'slot_ends_at' => $slot->slotEndsAt,
                             'projection_type' => $projection,
                             'language_version' => $this->pickLanguage($movie->age_rating),
-                            'status' => $slotEndsAt->isPast() ? ScreeningStatus::Finished : ScreeningStatus::Scheduled,
+                            'status' => $slot->slotEndsAt->isPast() ? ScreeningStatus::Finished : ScreeningStatus::Scheduled,
                         ]);
 
                         $this->createPrices($screening, $cursor, $projection);
@@ -79,7 +79,8 @@ class ScreeningSeeder extends Seeder
                         // Kolejny seans moze zaczac sie dopiero po zwolnieniu sali.
                         // Dzieki temu constraint screenings_no_overlap nigdy nie
                         // zostanie naruszony - seeder sam respektuje regule.
-                        $cursor = $this->ceilToQuarter($slotEndsAt);
+                        // Kursor w strefie kina: mnożniki cen patrzą na lokalną godzinę i dzień.
+                        $cursor = $this->ceilToQuarter($slot->slotEndsAt->setTimezone($cinema->timezone));
                     }
                 }
             }

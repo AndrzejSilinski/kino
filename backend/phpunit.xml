@@ -18,6 +18,15 @@
         </include>
     </source>
     <php>
+        <!--
+            Etap 7, blok G1 (pułapka BQ): cały zestaw działa w JEDNYM procesie PHP,
+            a pamięć rośnie z każdym testem. Najcięższe testy (PDF z kodem QR i logo,
+            przekodowanie plakatów w GD) mają szczyt ~100 MB. W obrazie Dockera GD jest
+            wbudowane w PHP, więc jego obrazy liczą się do memory_limit CLI (128M) —
+            przy 344 testach zestaw przekroczył limit. Limit dotyczy tylko testów:
+            żądania PHP-FPM mają własne 128M na każde żądanie.
+        -->
+        <ini name="memory_limit" value="512M"/>
         <env name="APP_ENV" value="testing"/>
         <env name="APP_MAINTENANCE_DRIVER" value="file"/>
         <env name="BCRYPT_ROUNDS" value="4"/>

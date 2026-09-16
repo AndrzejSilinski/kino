@@ -12,6 +12,8 @@ use App\Models\Movie;
 use App\Models\PriceCategory;
 use App\Models\Screening;
 use App\Models\ScreeningPrice;
+use App\Support\ScreeningTimeline;
+use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Carbon;
 
@@ -49,19 +51,19 @@ class ScreeningFactory extends Factory
 
     public function definition(): array
     {
-        $ads = (int) config('cinema.screening.ads_minutes', 15);
-        $cleanup = (int) config('cinema.screening.cleanup_buffer_minutes', 20);
-
-        $startsAt = Carbon::now()->addDay()->startOfHour()->addHours(6 * static::$slot++);
-        $endsAt = $startsAt->copy()->addMinutes(120 + $ads);
-        $slotEndsAt = $endsAt->copy()->addMinutes($cleanup);
+        // Etap 7: czasy z ScreeningTimeline, jak w panelu i seederze. Film fabryki
+        // ma stałe 120 minut (MovieFactory), więc okna slotów są przewidywalne.
+        $slot = ScreeningTimeline::fromConfig()->slot(
+            CarbonImmutable::now()->addDay()->startOfHour()->addHours(6 * static::$slot++),
+            120,
+        );
 
         return [
             'movie_id' => Movie::factory(),
             'hall_id' => Hall::factory(),
-            'starts_at' => $startsAt,
-            'ends_at' => $endsAt,
-            'slot_ends_at' => $slotEndsAt,
+            'starts_at' => $slot->startsAt,
+            'ends_at' => $slot->endsAt,
+            'slot_ends_at' => $slot->slotEndsAt,
             'projection_type' => ProjectionType::from('2d'),
             'language_version' => LanguageVersion::from('subtitles'),
             'status' => ScreeningStatus::from('scheduled'),

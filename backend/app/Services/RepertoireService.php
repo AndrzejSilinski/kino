@@ -186,11 +186,15 @@ class RepertoireService
     {
         $dayStart = CarbonImmutable::parse($date, $cinema->timezone)->startOfDay();
 
+        // Etap 7 (pułapka BN): granice dnia liczymy w strefie kina (addDay() zna dni
+        // 23- i 25-godzinne), ale do zapytania dajemy UTC. Laravel formatuje daty dla
+        // PostgreSQL bez strefy, więc 00:00 czasu warszawskiego trafiłoby do SQL jako
+        // 00:00 UTC i "dzień" przesuwałby się o 1–2 h względem kalendarza.
         return Screening::query()
             ->whereRelation('hall', 'cinema_id', $cinema->id)
             ->where('status', ScreeningStatus::Scheduled->value)
-            ->where('starts_at', '>=', $dayStart)
-            ->where('starts_at', '<', $dayStart->addDay())
+            ->where('starts_at', '>=', $dayStart->utc())
+            ->where('starts_at', '<', $dayStart->addDay()->utc())
             ->with([
                 'movie',
                 'hall' => fn ($query) => $query
