@@ -1,0 +1,2 @@
+# Pobierane przez npm ci wewnątrz kontenera; do repozytorium trafia tylko package-lock.json.
+node_modules/

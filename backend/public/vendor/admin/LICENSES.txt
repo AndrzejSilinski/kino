@@ -1,0 +1,3 @@
+@picocss/pico@2.1.1 (licencja: MIT)
+laravel-echo@2.4.0 (licencja: MIT)
+pusher-js@8.6.0 (licencja: MIT)

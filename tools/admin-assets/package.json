@@ -1,0 +1,10 @@
+{
+  "name": "cinema-admin-assets",
+  "private": true,
+  "description": "Przypięte pliki dystrybucyjne panelu administracyjnego (Etap 7). Bez builda: fetch.sh kopiuje je do backend/public/vendor/admin.",
+  "dependencies": {
+    "@picocss/pico": "2.1.1",
+    "laravel-echo": "2.4.0",
+    "pusher-js": "8.6.0"
+  }
+}
