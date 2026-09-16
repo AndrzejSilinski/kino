@@ -19,7 +19,10 @@
             <li><a href="?od={{ $next }}">Następny tydzień &rarr;</a></li>
         </ul>
         @if ($canPlan)
-            <ul><li><a href="{{ route('admin.cinemas.screenings.create', $cinema) }}" role="button">Dodaj seans</a></li></ul>
+            <ul>
+                <li><a href="{{ route('admin.cinemas.screenings.copy', ['cinema' => $cinema, 'z' => $days[0]->toDateString()]) }}" role="button" class="secondary">Kopiuj dzień</a></li>
+                <li><a href="{{ route('admin.cinemas.screenings.create', $cinema) }}" role="button">Dodaj seans</a></li>
+            </ul>
         @endif
     </nav>
 

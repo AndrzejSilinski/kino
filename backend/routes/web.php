@@ -9,6 +9,7 @@ use App\Livewire\Admin\Halls\HallIndex;
 use App\Livewire\Admin\Halls\HallLayoutEditor;
 use App\Livewire\Admin\Movies\MovieForm;
 use App\Livewire\Admin\Movies\MovieIndex;
+use App\Livewire\Admin\Screenings\RepertoireCopy;
 use App\Livewire\Admin\Screenings\ScreeningForm;
 use App\Livewire\Admin\Screenings\ScreeningWeek;
 use Illuminate\Support\Facades\Route;
@@ -72,5 +73,8 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
             ->name('cinemas.screenings.create')->middleware('can:create,App\Models\Screening');
         Route::livewire('/screenings/{screening}/edit', ScreeningForm::class)
             ->name('screenings.edit')->middleware('can:update,screening');
+        // Kopiowanie repertuaru z dnia na dzień (blok H) — planowanie, więc tylko administrator.
+        Route::livewire('/cinemas/{cinema}/screenings/copy', RepertoireCopy::class)
+            ->name('cinemas.screenings.copy')->middleware('can:create,App\Models\Screening');
     });
 });
