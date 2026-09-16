@@ -42,4 +42,23 @@ final class CinemaPolicy
 
         return $user->isStaff() && (int) $user->cinema_id === (int) $cinema->id;
     }
+
+    /**
+     * Lista kin w panelu (Etap 7, blok D). Strukturą sieci zarządza wyłącznie
+     * administrator; obsługa kina widzi sprzedaż swojego kina, nie jego ustawienia.
+     */
+    public function viewAny(User $user): bool
+    {
+        return $user->isAdmin();
+    }
+
+    public function create(User $user): bool
+    {
+        return $user->isAdmin();
+    }
+
+    public function update(User $user, Cinema $cinema): bool
+    {
+        return $user->isAdmin();
+    }
 }

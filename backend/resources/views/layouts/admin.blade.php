@@ -16,6 +16,9 @@
             <ul>
                 <li><strong>Kino · panel</strong></li>
                 <li><a href="{{ route('admin.dashboard') }}">Pulpit</a></li>
+                @can('viewAny', \App\Models\Cinema::class)
+                    <li><a href="{{ route('admin.cinemas.index') }}">Kina</a></li>
+                @endcan
             </ul>
             <ul>
                 <li>
@@ -34,6 +37,10 @@
         </nav>
     </header>
     <main class="container">
+        {{-- Komunikat po przekierowaniu z formularza (session()->flash w komponencie). --}}
+        @if (session('status'))
+            <article role="status">{{ session('status') }}</article>
+        @endif
         {{ $slot }}
     </main>
 </body>
