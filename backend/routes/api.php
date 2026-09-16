@@ -119,10 +119,10 @@ Route::middleware([ResolveBookingSession::class, 'throttle:seat-locks'])
         // Zablokuj miejsca. All-or-nothing, konflikt => 409.
         Route::post('/', [SeatLockController::class, 'store'])->name('store');
 
-        // Porzucenie całego koszyka (navigator.sendBeacon przy wyjściu).
+        // Porzucenie całego koszyka ("Wyczyść wybór"); 200 z pustym koszykiem (Etap 8, blok F).
         Route::delete('/', [SeatLockController::class, 'destroyAll'])->name('destroy-all');
 
-        // Odkliknięcie jednego miejsca. Idempotentne.
+        // Odkliknięcie jednego miejsca. Idempotentne; 200 z aktualnym koszykiem (Etap 8, blok F).
         Route::delete('/{seat}', [SeatLockController::class, 'destroy'])->name('destroy');
     });
 

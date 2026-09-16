@@ -130,3 +130,52 @@ export interface ScreeningDetails {
   };
   prices: { category: PriceCategory; price: Money }[];
 }
+
+export type SeatStatus = 'free' | 'held' | 'held_by_you' | 'sold' | 'unavailable';
+export type SeatType = 'standard' | 'double' | 'accessible';
+
+/** Miejsce w planie sali (SeatMapService::build). Pozycje liczone od 1; podwójne zajmuje kratki x i x+1. */
+export interface MapSeat {
+  id: number;
+  row: string;
+  number: number;
+  label: string;
+  type: SeatType;
+  type_label: string;
+  position: { x: number; y: number };
+  category: { id: number | null; name: string | null; color: string | null };
+  price: Money | null;
+  status: SeatStatus;
+  /** Tylko dla własnej blokady — cudzy czas wygaśnięcia byłby wyciekiem informacji o cudzym koszyku. */
+  lock_expires_at: string | null;
+  lock_expires_in_seconds: number | null;
+}
+
+/** GET /screenings/{id}/seat-map */
+export interface SeatMapSnapshot {
+  screening: ScreeningDetails;
+  seats: MapSeat[];
+  summary: Record<SeatStatus, number> & { total: number };
+  seat_state_version: number;
+}
+
+/** Pozycja koszyka (CartPricingService::forSession). */
+export interface CartSeat {
+  seat_id: number;
+  row: string;
+  number: number;
+  label: string;
+  type: SeatType;
+  category: { id: number | null; name: string | null; color: string | null };
+  price: Money;
+  lock_expires_at: string;
+}
+
+/** Koszyk: GET/POST/DELETE /screenings/{id}/seat-locks. Timer = najwcześniejsza blokada. */
+export interface Cart {
+  seats: CartSeat[];
+  seats_count: number;
+  total: Money;
+  expires_at: string | null;
+  expires_in_seconds: number | null;
+}

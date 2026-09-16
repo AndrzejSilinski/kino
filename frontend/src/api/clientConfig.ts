@@ -41,3 +41,14 @@ export async function fetchClientConfig(fetchImpl: typeof fetch = fetch): Promis
 
   return body.data;
 }
+
+let cached: Promise<ClientConfig> | null = null;
+
+/** Jedna konfiguracja na uruchomienie aplikacji; nieudane pobranie można ponowić. */
+export function loadClientConfig(): Promise<ClientConfig> {
+  cached ??= fetchClientConfig().catch((error: unknown) => {
+    cached = null;
+    throw error;
+  });
+  return cached;
+}

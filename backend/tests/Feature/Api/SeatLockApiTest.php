@@ -180,12 +180,15 @@ class SeatLockApiTest extends TestCase
 
         $this->withHeader('X-Session-Id', self::SESJA_A)
             ->deleteJson($this->url('/'.$miejsce))
-            ->assertNoContent();
+            ->assertOk()
+            ->assertJsonPath('data.seats_count', 0);
 
-        // Powtorka na nieistniejacej juz blokadzie: nadal 204, nie 404.
+        // Powtorka na nieistniejacej juz blokadzie: nadal 200 z koszykiem, nie 404
+        // (Etap 8, blok F: 200 z koszykiem zamiast 204).
         $this->withHeader('X-Session-Id', self::SESJA_A)
             ->deleteJson($this->url('/'.$miejsce))
-            ->assertNoContent();
+            ->assertOk()
+            ->assertJsonPath('data.seats_count', 0);
     }
 
     public function test_pusta_lista_miejsc_jest_odrzucana_po_polsku(): void

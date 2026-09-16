@@ -11,7 +11,6 @@ use App\Services\CartPricingService;
 use App\Services\SeatLockService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
 
 /**
  * Koszyk: blokowanie i zwalnianie miejsc.
@@ -64,13 +63,17 @@ class SeatLockController extends Controller
     /**
      * Odkliknięcie jednego miejsca.
      *
-     * Zwraca 204 także wtedy, gdy blokady już nie było. To nie jest
-     * niedbalstwo, tylko idempotencja: z punktu widzenia klienta stan
+     * Zwraca 200 z aktualnym koszykiem także wtedy, gdy blokady już nie było.
+     * To nie jest niedbalstwo, tylko idempotencja: z punktu widzenia klienta stan
      * docelowy ("nie trzymam tego miejsca") został osiągnięty. Zwracanie
      * 404 zmuszałoby frontend do obsługi błędu, który nie jest błędem —
      * a podwójne kliknięcie zdarza się nieustannie.
+     *
+     * Etap 8, blok F: 200 z koszykiem zamiast 204. Po odkliknięciu klient i tak
+     * potrzebuje nowej sumy i czasu wygaśnięcia; bez tego każde odkliknięcie
+     * kosztowałoby dwa żądania z limitu 30/min na sesję (DELETE + GET).
      */
-    public function destroy(Request $request, Screening $screening, Seat $seat): Response
+    public function destroy(Request $request, Screening $screening, Seat $seat): JsonResponse
     {
         $this->seatLocks->release(
             $screening,
@@ -78,25 +81,26 @@ class SeatLockController extends Controller
             $this->sessionId($request),
         );
 
-        return response()->noContent();
+        return $this->cartResponse($request, $screening, 200);
     }
 
     /**
-     * Porzucenie całego koszyka.
+     * Porzucenie całego koszyka ("Wyczyść wybór").
      *
-     * Wersja bez identyfikatora miejsca istnieje dla wyjścia ze strony:
-     * przeglądarka wyśle to przez navigator.sendBeacon, który nie potrafi
-     * dołączyć ciała do żądania DELETE. Dlatego lista miejsc nie może
-     * być w body — cała informacja musi zmieścić się w adresie.
+     * Etap 8, blok F: SPA NIE wysyła tego przy zamknięciu karty. navigator.sendBeacon
+     * nie ustawia nagłówka X-Session-Id, a fetch z keepalive w zdarzeniu pagehide
+     * odpaliłby się także przy zwykłym odświeżeniu strony i zwolnił miejsca klientowi,
+     * który tylko nacisnął F5. Porzucony koszyk zwalnia TTL blokad.
+     * Zwraca 200 z (pustym) koszykiem — ten sam kształt co pozostałe operacje.
      */
-    public function destroyAll(Request $request, Screening $screening): Response
+    public function destroyAll(Request $request, Screening $screening): JsonResponse
     {
         $this->seatLocks->releaseSession(
             $screening,
             $this->sessionId($request),
         );
 
-        return response()->noContent();
+        return $this->cartResponse($request, $screening, 200);
     }
 
     /** Sesja zakupowa z middleware ResolveBookingSession. */
