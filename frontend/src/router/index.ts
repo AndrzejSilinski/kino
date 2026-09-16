@@ -15,6 +15,25 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Wybierz kino' },
   },
   {
+    path: '/login',
+    name: 'login',
+    component: () => import('@/views/LoginView.vue'),
+    meta: { title: 'Logowanie', guestOnly: true },
+  },
+  {
+    path: '/register',
+    name: 'register',
+    component: () => import('@/views/RegisterView.vue'),
+    meta: { title: 'Załóż konto', guestOnly: true },
+  },
+  {
+    // Blok J rozbuduje konto o historię zakupów, profil i ustawienia powiadomień.
+    path: '/account',
+    name: 'account',
+    component: () => import('@/views/AccountView.vue'),
+    meta: { title: 'Moje konto', requiresAuth: true },
+  },
+  {
     // Każdy nieznany adres. nginx zwraca index.html dla wszystkich ścieżek SPA,
     // więc o "nie ma takiej strony" rozstrzyga router, a nie serwer.
     path: '/:pathMatch(.*)*',

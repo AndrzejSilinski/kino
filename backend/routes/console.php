@@ -116,3 +116,18 @@ Schedule::command('cinema:bookings:retry-refunds')
     ->onOneServer()
     ->runInBackground()
     ->appendOutputTo($output);
+
+/*
+ * Usuwanie wygasłych tokenów Sanctum (Etap 8, blok D).
+ *
+ * dailyAt('03:30') — wygasły token jest odrzucany przy każdym żądaniu już teraz
+ * (sanctum.expiration); komenda tylko sprząta tabelę personal_access_tokens, więc
+ * raz na dobę, poza godzinami sprzedaży, wystarczy. --hours=24: rekord znika dobę
+ * po wygaśnięciu tokenu.
+ */
+Schedule::command('sanctum:prune-expired --hours=24')
+    ->dailyAt('03:30')
+    ->withoutOverlapping(30)
+    ->onOneServer()
+    ->runInBackground()
+    ->appendOutputTo($output);

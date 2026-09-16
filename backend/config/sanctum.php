@@ -50,7 +50,11 @@ return [
     |
     */
 
-    'expiration' => null,
+    // Etap 8, blok D: tokeny wygasają — domyślnie 30 dni od wydania (SANCTUM_EXPIRATION w minutach).
+    // SPA trzyma token w localStorage, aplikacja mobilna w pamięci telefonu: token bez terminu
+    // ważności, raz wykradziony, działałby zawsze. 0 = bez wygasania (niezalecane).
+    // Wygasłe rekordy usuwa sanctum:prune-expired z harmonogramu (routes/console.php).
+    'expiration' => (int) env('SANCTUM_EXPIRATION', 60 * 24 * 30) ?: null,
 
     /*
     |--------------------------------------------------------------------------

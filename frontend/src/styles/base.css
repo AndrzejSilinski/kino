@@ -9,6 +9,8 @@
   --color-muted: #52525b;
   --color-accent: #1d4ed8;
   --color-focus: #f59e0b;
+  --color-danger: #b91c1c;
+  --color-on-accent: #ffffff;
   --radius: 0.5rem;
   --space: 1rem;
   --max-width: 72rem;
@@ -25,6 +27,8 @@
     --color-text: #f4f4f5;
     --color-muted: #a1a1aa;
     --color-accent: #93b4ff;
+    --color-danger: #fca5a5;
+    --color-on-accent: #0f0f12;
   }
 }
 
@@ -81,4 +85,106 @@ a {
 
 .stack > * + * {
   margin-top: var(--space);
+}
+
+/* ─── Blok D: nagłówek z kontem i formularze ─────────────────────────── */
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space);
+}
+
+.site-header nav {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space);
+}
+
+.narrow {
+  max-width: 28rem;
+}
+
+.field {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.field input {
+  font: inherit;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-muted);
+  border-radius: var(--radius);
+  background: var(--color-bg);
+  color: var(--color-text);
+  min-height: 2.75rem;
+}
+
+.field input[aria-invalid='true'] {
+  border-color: var(--color-danger);
+  border-width: 2px;
+}
+
+.field-hint {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 0.875rem;
+}
+
+.field-error,
+.alert {
+  margin: 0;
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.alert::before,
+.field-error::before {
+  content: '⚠ ';
+}
+
+.notice {
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+button {
+  font: inherit;
+  min-height: 2.75rem;
+  padding: 0.5rem 1.25rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.link-button {
+  min-height: auto;
+  padding: 0;
+  background: none;
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem var(--space);
+}
+
+.details dt {
+  color: var(--color-muted);
+}
+
+.details dd {
+  margin: 0;
 }

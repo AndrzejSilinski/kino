@@ -1,0 +1,27 @@
+/*
+ * Wspólne instancje warstwy API dla całej aplikacji (Etap 8, blok D).
+ *
+ * Klient HTTP nie importuje store'ów ani routera (brak cyklicznych zależności i łatwe testy):
+ * main.ts wpina mu przez configureHttp() sposób odczytu tokenu i reakcję na 401.
+ */
+import { createAuthApi } from './auth';
+import { createBookingSessionStore } from './bookingSession';
+import { createHttpClient } from './http';
+
+let readToken: () => string | null = () => null;
+let handleUnauthorized: () => void = () => {};
+
+export function configureHttp(hooks: { getToken: () => string | null; onUnauthorized: () => void }): void {
+  readToken = hooks.getToken;
+  handleUnauthorized = hooks.onUnauthorized;
+}
+
+export const bookingSession = createBookingSessionStore();
+
+export const http = createHttpClient({
+  getToken: () => readToken(),
+  bookingSession,
+  onUnauthorized: () => handleUnauthorized(),
+});
+
+export const authApi = createAuthApi(http);
