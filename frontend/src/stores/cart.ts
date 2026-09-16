@@ -20,6 +20,7 @@ import { seatsApi } from '@/api/client';
 import { isApiError } from '@/api/errors';
 import type { Cart } from '@/api/types';
 import type { Deadline } from '@/composables/useCountdown';
+import type { SeatChanges } from '@/realtime/seatSync';
 import { presentSeat } from '@/lib/seatState';
 import { createSerialQueue } from '@/lib/serialQueue';
 import { messageFor } from '@/messages';
@@ -219,12 +220,26 @@ export const useCartStore = defineStore('cart', () => {
     }
   }
 
+  /**
+   * Zdarzenie WebSocket (blok G) mówi, że nasze miejsce jest wolne albo sprzedane, a nie odklikaliśmy go:
+   * blokada wygasła albo zabrało ją anulowanie seansu. Źródłem prawdy o koszyku jest serwer — pobieramy go.
+   * "held" dla naszego miejsca to nasza blokada (zdarzenie nie mówi, czyja), więc go nie ruszamy.
+   */
+  function onSeatChanges(changes: SeatChanges): void {
+    const lost = [...(changes.free ?? []), ...(changes.sold ?? [])]
+      .some((id) => ownSeatIds.value.has(id) && !pending.value.has(id));
+    if (lost) {
+      notice.value = { tone: 'info', text: 'Jedno z wybranych miejsc wróciło do puli albo zostało sprzedane. Sprawdź wybór.' };
+      void refreshCart();
+    }
+  }
+
   function dismissNotice(): void {
     notice.value = null;
   }
 
   return {
     screeningId, cart, deadline, pending, notice, closed, maxSeats, ownSeatIds, seatsCount,
-    start, toggle, clear, refreshCart, onExpired, resync, dismissNotice,
+    start, toggle, clear, refreshCart, onExpired, resync, dismissNotice, onSeatChanges,
   };
 });

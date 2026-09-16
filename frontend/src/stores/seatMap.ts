@@ -11,6 +11,7 @@ import { defineStore } from 'pinia';
 import { seatsApi } from '@/api/client';
 import { isApiError } from '@/api/errors';
 import type { MapSeat, ScreeningDetails, SeatStatus } from '@/api/types';
+import type { SeatChanges } from '@/realtime/seatSync';
 import { messageFor } from '@/messages';
 
 export const useSeatMapStore = defineStore('seatMap', () => {
@@ -43,8 +44,12 @@ export const useSeatMapStore = defineStore('seatMap', () => {
         return false;
       }
       screening.value = snapshot.screening;
-      seats.value = snapshot.seats;
-      version.value = snapshot.seat_state_version;
+      // Etap 8, blok G: migawka starsza niż stan ze zdarzeń WebSocket cofnęłaby plan
+      // (żądanie wyszło przed zmianą, odpowiedź przyszła po zdarzeniu). Wtedy zostawiamy statusy.
+      if (snapshot.seat_state_version >= version.value || seats.value.length === 0) {
+        seats.value = snapshot.seats;
+        version.value = snapshot.seat_state_version;
+      }
       return true;
     } catch (error) {
       if (current === sequence) {
@@ -77,5 +82,25 @@ export const useSeatMapStore = defineStore('seatMap', () => {
     seats.value = seats.value.map((seat) => (taken.has(seat.id) && (seat.status === 'free' || seat.status === 'held_by_you') ? { ...seat, status: 'held' } : seat));
   }
 
-  return { screeningId, screening, seats, version, loading, errorMessage, notFound, byId, load, setStatus, markTaken };
+  /**
+   * Zdarzenie seats.changed: stan absolutny pogrupowany po statusie (free / held / sold).
+   * Kolejność i luki w wersjach pilnuje seatSync — tu tylko nakładamy i przesuwamy wersję.
+   */
+  function applyChanges(changes: SeatChanges, newVersion: number): void {
+    const next = new Map<number, SeatStatus>();
+    for (const [status, ids] of Object.entries(changes) as [SeatStatus, number[] | undefined][]) {
+      ids?.forEach((id) => next.set(id, status));
+    }
+    seats.value = seats.value.map((seat) => {
+      const status = next.get(seat.id);
+      // "held_by_you" zostaje przy "held": zdarzenie nie mówi, czyja blokada (o tym decyduje koszyk).
+      if (status === undefined || status === seat.status || (status === 'held' && seat.status === 'held_by_you')) {
+        return seat;
+      }
+      return { ...seat, status };
+    });
+    version.value = newVersion;
+  }
+
+  return { screeningId, screening, seats, version, loading, errorMessage, notFound, byId, load, setStatus, markTaken, applyChanges };
 });

@@ -663,3 +663,26 @@ button:disabled {
   color: var(--color-danger);
   font-weight: 600;
 }
+
+/* ─── Blok G: stan aktualizacji na żywo ───────────────────────────────── */
+.realtime-status {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+.realtime-status.is-live span {
+  color: var(--seat-selected);
+}
+
+.realtime-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  border: 2px dashed var(--color-muted);
+  background: var(--color-surface);
+}

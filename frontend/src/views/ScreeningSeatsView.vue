@@ -3,15 +3,18 @@
  * Wybór miejsc na seansie (wymóg 3.2). Logika blokowania jest w store'ach (cart, seatMap)
  * i w czystych modułach (seatState, seatLayout) — widok tylko łączy je z komponentami.
  */
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterLink, useRoute } from 'vue-router';
 import { loadClientConfig } from '@/api/clientConfig';
+import RealtimeBanner from '@/components/realtime/RealtimeBanner.vue';
 import CartPanel from '@/components/seats/CartPanel.vue';
 import CountdownTimer from '@/components/seats/CountdownTimer.vue';
 import SeatLegend from '@/components/seats/SeatLegend.vue';
 import SeatMap from '@/components/seats/SeatMap.vue';
 import { dateOf, formatDayLabel, timeOf } from '@/lib/datetime';
 import { buildSeatLayout } from '@/lib/seatLayout';
+import { getRealtimeConnection } from '@/realtime';
+import { createSeatSync, type SeatSync, type SyncStatus } from '@/realtime/seatSync';
 import { DEFAULT_MAX_SEATS, useCartStore } from '@/stores/cart';
 import { useSeatMapStore } from '@/stores/seatMap';
 
@@ -23,9 +26,59 @@ const id = computed(() => Number(route.params.id));
 const screening = computed(() => seatMap.screening);
 const layout = computed(() => (screening.value ? buildSeatLayout(seatMap.seats, screening.value.hall.grid) : null));
 
+const syncStatus = ref<SyncStatus>('connecting');
+const refreshing = ref(false);
+let sync: SeatSync | null = null;
+
+/** Na żywo (blok G): migawka -> subskrypcja -> migawka po subscription_succeeded (decyzja 125). */
+async function startRealtime(screeningId: number): Promise<void> {
+  sync?.stop();
+  sync = null;
+  syncStatus.value = 'connecting';
+  try {
+    const connection = await getRealtimeConnection();
+    if (id.value !== screeningId) {
+      return;
+    }
+    sync = createSeatSync({
+      screeningId,
+      connection,
+      target: {
+        version: () => seatMap.version,
+        loadSnapshot: async () => {
+          await seatMap.load(screeningId);
+        },
+        applyChanges: (changes, version) => {
+          seatMap.applyChanges(changes, version);
+          cart.onSeatChanges(changes);
+        },
+      },
+      onStatus: (status) => {
+        syncStatus.value = status;
+      },
+    });
+    await sync.start();
+  } catch {
+    // Brak konfiguracji albo biblioteki: plan działa przez REST, baner proponuje ręczne odświeżenie.
+    syncStatus.value = 'unavailable';
+  }
+}
+
+async function refreshPlan(): Promise<void> {
+  refreshing.value = true;
+  try {
+    await cart.resync();
+  } finally {
+    refreshing.value = false;
+  }
+}
+
 async function start(screeningId: number): Promise<void> {
   const maxSeats = await loadClientConfig().then((config) => config.booking.max_seats_per_session).catch(() => DEFAULT_MAX_SEATS);
   await cart.start(screeningId, maxSeats);
+  if (seatMap.screening?.is_bookable) {
+    await startRealtime(screeningId);
+  }
 }
 
 function onVisibility(): void {
@@ -41,7 +94,12 @@ watch(id, (value) => {
 }, { immediate: true });
 
 onMounted(() => document.addEventListener('visibilitychange', onVisibility));
-onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibility));
+onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibility);
+  // Wyjście z widoku = wypisanie z kanału seansu.
+  sync?.stop();
+  sync = null;
+});
 </script>
 
 <template>
@@ -68,6 +126,7 @@ onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibil
       </header>
 
       <p v-if="cart.closed" role="alert" class="alert">Sprzedaż na ten seans jest zamknięta.</p>
+      <RealtimeBanner v-else :status="syncStatus" :refreshing="refreshing" @refresh="refreshPlan" />
       <div v-if="cart.notice" :role="cart.notice.tone === 'error' ? 'alert' : 'status'" class="notice" :class="`notice-${cart.notice.tone}`" data-test="cart-notice">
         <span>{{ cart.notice.text }}</span>
         <button type="button" class="link-button" aria-label="Zamknij komunikat" @click="cart.dismissNotice">✕</button>
