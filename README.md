@@ -13,6 +13,7 @@ bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
 | Cache, sesje, kolejka | Redis 7 (AOF) | jeden broker dla cache i kolejki, patrz Etap 5 |
 | Serwer WWW | nginx + PHP-FPM (Alpine) | |
 | Zadania w tle | kontenery `worker` (`queue:work`) i `scheduler` (`schedule:work`) | |
+| WebSocket | Laravel Reverb (protokół Pushera) za nginx, kontener `reverb` | patrz Etap 6 |
 | Płatności | Stripe (Payment Intents, `stripe/stripe-php`) | patrz Etap 4 |
 | Bilety | `endroid/qr-code` (QR), `dompdf/dompdf` (PDF) | patrz Etap 5 |
 | Poczta w środowisku deweloperskim | Mailpit | następca nierozwijanego Mailhoga |
@@ -43,6 +44,10 @@ cp backend/.env.example backend/.env
 
 # Klucz podpisu kodów QR (bez niego aplikacja nie wystawi biletu).
 sed -i "s/^TICKET_QR_KEY=$/TICKET_QR_KEY=$(openssl rand -hex 32)/" backend/.env
+# Klucze Reverba (WebSocket): identyfikator aplikacji, klucz publiczny i sekret podpisu.
+sed -i "s/^REVERB_APP_ID=.*/REVERB_APP_ID=$(shuf -i 100000-999999 -n 1)/" backend/.env
+sed -i "s/^REVERB_APP_KEY=.*/REVERB_APP_KEY=$(openssl rand -hex 10)/" backend/.env
+sed -i "s/^REVERB_APP_SECRET=.*/REVERB_APP_SECRET=$(openssl rand -hex 20)/" backend/.env
 # Klucze trybu testowego Stripe'a: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY
 # uzupełnij ręcznie w backend/.env (Dashboard Stripe → Developers → API keys).
 
@@ -54,7 +59,7 @@ docker compose up --build -d
 docker compose exec php composer install
 docker compose exec php php artisan key:generate
 docker compose exec php php artisan migrate --seed
-docker compose restart worker scheduler
+docker compose restart worker scheduler reverb
 ```
 
 Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
@@ -65,6 +70,7 @@ Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
 | <http://localhost:8080/api/v1> | REST API |
 | <http://localhost:8080/docs/api> | dokumentacja API (Scramble) |
 | <http://localhost:8025> | Mailpit — cała poczta wysłana przez aplikację |
+| `ws://localhost:8080/app/{REVERB_APP_KEY}` | WebSocket (Reverb przez nginx), patrz Etap 6 |
 
 Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
 
@@ -89,9 +95,9 @@ Konta testowe (hasło `password`):
 
 ```text
 cinema/
-├── docker-compose.yml        php, worker, scheduler, nginx, postgres, redis, mailpit
+├── docker-compose.yml        php, worker, scheduler, reverb, nginx, postgres, redis, mailpit
 ├── docker/
-│   ├── nginx/default.conf    kieruje wszystko poza public/ do PHP-FPM
+│   ├── nginx/default.conf    /app/ do Reverba, reszta poza public/ do PHP-FPM
 │   ├── php/Dockerfile        PHP 8.4-FPM Alpine: pdo_pgsql, redis, gd, intl, pcntl, zbar
 │   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
 ├── backend/                  aplikacja Laravel (API, kolejki, scheduler)
@@ -107,6 +113,7 @@ cinema/
 │   ├── routes/api.php        /api/v1
 │   ├── routes/console.php    harmonogram
 │   └── tests/                PHPUnit na PostgreSQL (Unit, Feature)
+├── tools/realtime-probe/     (Etap 6) sonda WebSocket: pusher-js w kontenerze Node
 ├── frontend/                 (Etap 8) Vue 3
 └── mobile/                   (Etap 9) Flutter
 ```
@@ -130,6 +137,7 @@ erDiagram
     seats ||--o{ tickets : ""
     cinemas |o--o{ users : "obsługa kina"
     bookings |o--o{ stripe_webhook_events : ""
+    screenings ||--o| screening_seat_versions : "wersja stanu miejsc"
 ```
 
 | Tabela | Rola | Najważniejsze ograniczenia |
@@ -142,6 +150,7 @@ erDiagram
 | `screenings` | seans: `starts_at`, `ends_at`, `slot_ends_at`, projekcja, wersja językowa, status | **`EXCLUDE USING gist (hall_id =, tstzrange(starts_at, slot_ends_at) &&) WHERE status <> 'cancelled'`** |
 | `screening_prices` | cena per seans i kategoria (grosze) | |
 | `seat_locks` | tymczasowa blokada miejsca | **`UNIQUE (screening_id, seat_id) WHERE released_at IS NULL`** |
+| `screening_seat_versions` | licznik wersji stanu miejsc per seans (Etap 6) | klucz główny = `screening_id`, CHECK `version > 0` |
 | `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień | CHECK statusu, `stripe_payment_intent_id` UNIQUE, indeks częściowy `bookings_confirmation_pending` |
 | `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`**, `code` UNIQUE |
 | `users` | klient, obsługa kina, administrator | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
@@ -224,7 +233,7 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 - [x] Etap 3 — REST API ścieżki zakupowej
 - [x] Etap 4 — Stripe, webhook, obsługa wyścigu przy płatności
 - [x] Etap 5 — bilety, QR, PDF, kolejki, mail, scheduler
-- [ ] Etap 6 — WebSocket (Laravel Reverb)
+- [x] Etap 6 — WebSocket (Laravel Reverb)
 - [ ] Etap 7 — panel administracyjny (Livewire)
 - [ ] Etap 8 — frontend Vue 3
 - [ ] Etap 9 — aplikacja Flutter
@@ -418,9 +427,10 @@ a osobny test-bezpiecznik (`DatabaseEnvironmentTest`) pilnuje, żeby nikt nie ur
 czyszczących testów na bazie deweloperskiej.
 
 **Test obowiązkowy** uruchamia 20 procesów systemowych przez `proc_open()`.
-Nie użyto `pcntl_fork()`, bo rozszerzenie `pcntl` nie jest domyślnie w obrazie
-`php:8.4-fpm` (recruiter musiałby przebudować kontener), a procesy potomne
-dziedziczyłyby po rodzicu to samo połączenie PDO. Każdy proces boot-uje Laravel od
+Nie użyto `pcntl_fork()`: procesy potomne dziedziczyłyby po rodzicu to samo
+połączenie PDO i stan aplikacji, więc nie byłyby niezależnymi klientami bazy.
+Rozszerzenie `pcntl` jest w obrazie (potrzebuje go `queue:work` do limitu czasu
+zadań), ale do tego testu się nie nadaje. Każdy proces boot-uje Laravel od
 zera i otwiera własne połączenie — izolacja identyczna z produkcyjną. Wspólna
 **bariera startu** (znacznik `microtime` przekazywany argumentem) sprawia, że wszystkie
 uderzają w bazę równocześnie, zamiast po kolei w miarę startowania.
@@ -460,9 +470,9 @@ SEAT_LOCK_SWEEP_BATCH=500            # rozmiar porcji przy czyszczeniu
   wykonuje się co minutę.
 - **Migracje nie uruchamiają się same** przy `docker compose up` — po starcie trzeba
   wykonać `php artisan migrate --seed`. Docelowo trafi to do entrypointu kontenera PHP.
-- **Brak broadcastu** — zmiana zajętości miejsca nie jest jeszcze rozgłaszana przez
-  WebSocket. Reverb w Etapie 6; miejsce na `SeatLocked` / `SeatReleased` jest już
-  wyznaczone w `SeatLockService`.
+- ~~Brak broadcastu~~ — **rozwiązane w Etapie 6**: każda zmiana stanu miejsc
+  podbija wersję w `SeatStateRecorder`, a po COMMIT wychodzi zdarzenie
+  `seats.changed` na kanale seansu.
 - **Bariera startu w teście to 3 sekundy** — na wolniejszej maszynie część procesów
   może wystartować już po niej. Test pozostaje poprawny (asercje dotyczą wyniku,
   nie czasu), ale kontencja jest wtedy słabsza. Docelowo lepszym rozwiązaniem byłaby
@@ -510,6 +520,7 @@ w `bootstrap/app.php`. Nie w nagłówku `Accept`, bo:
 | DELETE | `/screenings/{screening}/seat-locks` | porzucenie koszyka (sendBeacon) |
 | GET | `/bookings` | tylko własne, paginowane |
 | GET | `/bookings/{reference}` | klucz: ULID, chronione Policy |
+| POST | `/broadcasting/auth` | (Etap 6) podpis kanału prywatnego; token opcjonalny, limit 60/min per klient i 1200/min per IP |
 
 ### Kształt odpowiedzi
 
@@ -552,7 +563,9 @@ Błąd — jeden kształt dla wszystkiego:
 | `SCREENING_NOT_BOOKABLE` | 409 | seans odwołany lub rozpoczęty |
 | `PRICE_NOT_CONFIGURED` | 409 | brak ceny dla kategorii miejsca |
 | `INVALID_SESSION_ID` | 422 | zły format nagłówka X-Session-Id |
+| `CHANNEL_FORBIDDEN` | 403 | (Etap 6) brak dostępu do kanału WebSocket |
 | `TOO_MANY_REQUESTS` | 429 | przekroczony limit (+ Retry-After) |
+| `REALTIME_UNAVAILABLE` | 503 | (Etap 6) broadcaster nie potrafi podpisywać kanałów |
 | `SERVER_ERROR` | 500 | wszystko pozostałe, bez stack trace |
 
 ### Konwencje pól
@@ -1327,3 +1340,348 @@ Poza testami automatycznymi sprawdzone ręcznie na działającym środowisku:
   konkretnej wersji.
 - **Migracje i restart workera nie są automatyczne** — trafią do entrypointu
   w Etapie 10.
+
+---
+
+## Etap 6 — WebSocket (Laravel Reverb)
+
+Plan sali zmienia się na żywo u wszystkich oglądających, właściciel rezerwacji
+dowiaduje się o wyniku płatności bez odpytywania API, a panel dostaje feed
+sprzedaży. Serwer WebSocket to **Laravel Reverb** (protokół Pushera), więc
+klienci używają gotowych bibliotek: `laravel-echo` + `pusher-js` w Vue
+i klienta Pushera we Flutterze.
+
+Zasada przewodnia całego etapu: **broadcast to powiadomienie, a nie warunek
+sprzedaży**. Blokada miejsca, płatność i bilety są zatwierdzone w bazie, zanim
+cokolwiek wyjdzie do Reverba. Awaria Reverba kończy się ostrzeżeniem w logu,
+nigdy błędem operacji.
+
+### Architektura
+
+```text
+przeglądarka / telefon                       kontenery PHP (php, worker, scheduler)
+  │                                             │
+  │ ws://localhost:8080/app/{REVERB_APP_KEY}    │ POST http://reverb:8080/apps/{id}/events
+  ▼                                             ▼   (podpis sekretem aplikacji)
+nginx ── location /app/ ──────────────────► reverb (php artisan reverb:start)
+  │
+  └── /api/v1/broadcasting/auth ──► PHP-FPM: ChannelAuthorizationService → Policies
+```
+
+- Reverb nie ma portów na hoście. Klienci wchodzą przez nginx ścieżką `/app/`,
+  a API publikacji (`/apps/...`) jest dostępne wyłącznie w sieci Dockera.
+- Laravel publikuje zdarzenie **zwykłym żądaniem HTTP** (`pusher/pusher-php-server`
+  na Guzzle). Reverb rozsyła je subskrybentom kanału.
+
+### Kanały i zdarzenia
+
+| Kanał | Kto może subskrybować | Zdarzenia |
+|---|---|---|
+| `private-screenings.{id}` | każdy, także anonim — jeśli seans jest w sprzedaży i jeszcze się nie zaczął (`ScreeningPolicy::watchSeatMap`) | `seats.changed`, `seats.resync` |
+| `private-bookings.{reference}` | **tylko właściciel** rezerwacji (`BookingPolicy::listen`) | `booking.status-changed` |
+| `private-cinemas.{id}.sales` | administrator i obsługa **tego** kina (`CinemaPolicy::viewSales`) | `sales.activity` |
+| `private-sales` | tylko administrator (`CinemaPolicy::viewAnySales`) | `sales.activity` |
+
+Payloady (pełne, bez skrótów):
+
+```json
+// seats.changed — stan ABSOLUTNY zmienionych miejsc, pogrupowany po statusie
+{"screening_id": 53, "version": 7, "seats": {"held": [311, 312]}}
+
+// seats.resync — zmiana za duża na jedno zdarzenie; klient pobiera plan sali
+{"screening_id": 53, "version": 8}
+
+// booking.status-changed
+{"reference": "01M2…", "status": "paid", "status_label": "Opłacona",
+ "occurred_at": "2026-09-15T20:01:52+00:00"}
+
+// sales.activity — typ: booking.created | paid | cancelled | expired | refunded
+{"type": "booking.paid", "reference": "01M2…", "status": "paid", "status_label": "Opłacona",
+ "cinema": {"id": 1, "name": "Kino Atlantyk"},
+ "screening": {"id": 51, "starts_at": "2026-09-15T16:45:00+02:00", "movie_title": "Incepcja", "hall_name": "Sala 1"},
+ "seats_count": 2, "total": {"amount": 4400, "currency": "PLN", "formatted": "44,00 zł"},
+ "occurred_at": "2026-09-15T20:01:52+00:00"}
+```
+
+**Żadnych danych osobowych** (wymóg 1.3): ani sesji zakupowej, ani e-maila,
+imienia czy `user_id`. Broadcast mówi, *które* miejsce jest zajęte, a nie
+*czyje*; feed mówi, *co* sprzedano, a nie *komu*. Testy pilnują białej listy
+kluczy, więc nowe pole w payloadzie musi być świadomą decyzją.
+
+Kiedy wychodzą zdarzenia rezerwacji:
+
+| Moment | Kanał właściciela | Feed sprzedaży |
+|---|---|---|
+| `BookingService::checkout()` — **nowa** rezerwacja | — (klient zna wynik z odpowiedzi) | `booking.created` |
+| `BookingPaid` — dopiero po capture (decyzja 72) | `paid` | `booking.paid` |
+| wygaśnięcie / anulowanie / zwrot | status | `booking.expired` / `.cancelled` / `.refunded` |
+| wycofanie biletów | `cancelled` | `booking.cancelled` |
+
+### Autoryzacja kanałów
+
+`POST /api/v1/broadcasting/auth` — własny endpoint zamiast `Broadcast::routes()`.
+Standardowa ścieżka odrzuca kanał `private-*` kodem 403, zanim zapyta callback
+kanału, jeśli żądanie nie ma zalogowanego użytkownika — a plan sali ma działać
+także dla kupującego bez konta.
+
+- Token bearer jest **opcjonalny**; użytkownika czytamy strażnikiem `sanctum`.
+  O dostępie anonima decyduje Policy, nie middleware.
+- `ChannelAuthorizationService` ma jawną mapę *nazwa kanału → zasób → Policy*.
+  Nieznany kanał to odmowa — nie ma „domyślnie wpuść”.
+- Podpis HMAC liczy ta sama biblioteka, której używa framework
+  (`getPusher()->authorizeChannel()`), więc serwis nie dotyka obiektu `Request`.
+- Sukces to surowe `{"auth": "klucz:podpis"}` bez koperty `data` — tego wymaga
+  protokół Pushera. Błędy mają zwykły kształt z polem `code`.
+
+| Kod | HTTP | Kiedy |
+|---|---|---|
+| `CHANNEL_FORBIDDEN` | 403 | brak uprawnień, nieznany kanał **albo nieistniejący zasób** (bez enumeracji rezerwacji i seansów) |
+| `REALTIME_UNAVAILABLE` | 503 | skonfigurowany broadcaster nie potrafi podpisywać (błąd konfiguracji, logowany) |
+| `VALIDATION_FAILED` | 422 | zły `socket_id` albo kanał spoza `private-*` |
+| `TOO_MANY_REQUESTS` | 429 | limiter `broadcasting-auth`: 60/min per klient (użytkownik, sesja zakupowa albo IP) **i** 1200/min per IP |
+
+### Kolejność zdarzeń i reconnect: wersja stanu miejsc
+
+Tabela `screening_seat_versions` trzyma licznik per seans. Każda transakcja,
+która zmienia stan miejsc (blokada, zwolnienie, sweep, bilety, wygaśnięcie,
+wycofanie), jako **ostatnią instrukcję** wykonuje:
+
+```sql
+INSERT INTO screening_seat_versions (screening_id, version, updated_at) VALUES (?, 1, now())
+ON CONFLICT (screening_id) DO UPDATE SET version = screening_seat_versions.version + 1, updated_at = now()
+RETURNING version
+```
+
+- Upsert blokuje wiersz licznika do COMMIT, więc **numer wersji odpowiada
+  kolejności commitów**. Transakcje, które przegrały wyścig o miejsce (409),
+  do licznika w ogóle nie dochodzą.
+- Plan sali (`GET /screenings/{id}/seat-map`) zwraca `seat_state_version`.
+  Wersję czytamy **przed** stanem miejsc, więc jest dolną granicą: stan może
+  zawierać zmiany nowsze niż wersja, nigdy starsze. Nie trzeba `REPEATABLE READ`.
+
+**Algorytm klienta** (wymóg 1.3: „po utracie połączenia pełny stan przez REST,
+potem subskrypcja”):
+
+1. `GET seat-map` → stan i wersja `V`.
+2. Subskrypcja `private-screenings.{id}`.
+3. Po `subscription_succeeded` ponowny odczyt wersji. Jeśli jest większa niż
+   `V`, zmiana wpadła w okno między snapshotem a subskrypcją — klient pobiera
+   plan jeszcze raz. **Kolejność z wymogu ma to okno; licznik je zamyka.**
+4. Zdarzenia z `version <= znana` klient pomija; zdarzenie z `version > znana + 1`
+   oznacza lukę → `GET seat-map`. `seats.resync` → `GET seat-map`.
+
+Zdarzenia niosą stan absolutny, więc ponowne zastosowanie jest nieszkodliwe.
+
+Działająca konfiguracja klienta `pusher-js` (host, port, własny handler
+autoryzacji) jest w `tools/realtime-probe/probe.mjs`, funkcja `connect()`.
+W `laravel-echo` nazwy zdarzeń z `broadcastAs()` podaje się z kropką na
+początku (`.seats.changed`), inaczej Echo dokleja przestrzeń nazw `App\Events`.
+
+### Wysyłka po COMMIT, odporność i bezpiecznik
+
+```text
+DB::transaction
+  ├─ … zmiana stanu miejsc / rezerwacji …
+  ├─ SeatStateRecorder::record() → wersja N → DB::afterCommit(seatsChanged)
+  └─ BookingService → DB::afterCommit(bookingChanged)
+COMMIT ──────────────────────────────────────────────────────────────────
+  └─ RealtimeNotifier
+       ├─ bezpiecznik otwarty?  → pomiń (0 ms, bez logu)
+       ├─ event(ShouldBroadcastNow) → Reverb (connect_timeout 0,5 s)
+       └─ wyjątek → otwórz bezpiecznik na 10 s + JEDNO ostrzeżenie w logu
+```
+
+- **Po ROLLBACK zdarzenie nie wychodzi** — callback `afterCommit` przepada,
+  więc klient nigdy nie zobaczy „ducha” zmiany, której nie ma w bazie.
+  Żądanie HTTP do Reverba nie trzyma też blokad wierszy.
+- **`ShouldBroadcastNow`, bez kolejki.** Spóźnione o 10–40 s zdarzenie (ponowienie
+  z kolejki) niosłoby stan już nieaktualny.
+- **Krótkie timeouty klienta publikacji** (`client_options`): framework domyślnie
+  czeka 10 s na połączenie i 30 s na odpowiedź. Zmierzone przy niedostępnym
+  hoście: 0,51 s zamiast 10,00 s.
+- **Bezpiecznik** (`RealtimeCircuitBreaker`): klucz w cache (Redis) z czasem życia.
+  Dopóki istnieje, żaden proces — php-fpm, worker, scheduler — nie próbuje
+  wysyłać. `Cache::add()` to w Redisie `SET NX`, więc z kilku procesów, które
+  zawiodły jednocześnie, dokładnie jeden zapisuje ostrzeżenie. Awaria samego
+  cache nie blokuje wysyłki (*fail-open*).
+
+Koszt awarii Reverba przed i po bezpieczniku:
+
+| Scenariusz | Bez bezpiecznika | Z bezpiecznikiem |
+|---|---|---|
+| blokada miejsca | +0,5 s każda | +0,5 s pierwsza, potem ~0 |
+| przejście rezerwacji (miejsca, właściciel, feed) | +1,5 s każde | ~0 przy otwartym |
+| przebieg wygaszania 100 rezerwacji | do ~150 s | ~0,5 s |
+
+### Infrastruktura
+
+- Kontener **`reverb`** z tej samej kotwicy `x-php-app` co `php`, `worker`
+  i `scheduler`: `php artisan reverb:start`, uid 82, healthcheck `GET /up`,
+  bez sekcji `ports`.
+- **nginx** `location ^~ /app/` z nagłówkami `Upgrade` / `Connection`
+  i `proxy_read_timeout 120s`. Adres Reverba idzie przez zmienną
+  i `resolver 127.0.0.11`, dzięki czemu nginx startuje i obsługuje API także
+  wtedy, gdy kontenera `reverb` nie ma (502 wyłącznie na `/app/`).
+- `laravel/reverb` 1.x instalowany ręcznie: `config/broadcasting.php` zawiera
+  tylko połączenia `reverb`, `log` i `null`; `config/reverb.php` jest
+  opublikowany bez zmian.
+- **Reverb trzyma konfigurację w pamięci** — po zmianie `REVERB_*`:
+  `docker compose restart reverb`.
+
+### Konfiguracja
+
+| Zmienna | Domyślnie | Znaczenie |
+|---|---|---|
+| `BROADCAST_CONNECTION` | `reverb` | w `phpunit.xml`: `null` |
+| `REVERB_APP_ID` / `REVERB_APP_KEY` / `REVERB_APP_SECRET` | **brak** | identyfikator, klucz publiczny (trafia do klientów) i sekret podpisu |
+| `REVERB_HOST` / `REVERB_PORT` / `REVERB_SCHEME` | `reverb` / `8080` / `http` | adres Reverba widziany **z kontenerów PHP** |
+| `REVERB_SERVER_HOST` / `REVERB_SERVER_PORT` | `0.0.0.0` / `8080` | na czym nasłuchuje sam Reverb |
+| `REVERB_CLIENT_CONNECT_TIMEOUT` / `REVERB_CLIENT_TIMEOUT` | `0.5` / `1.5` | sekundy; limit publikacji |
+| `BROADCAST_MAX_PAYLOAD_BYTES` | `8000` | większa zmiana idzie jako `seats.resync` (Reverb przyjmuje do 10 000 bajtów) |
+| `BROADCAST_BREAKER_SECONDS` | `10` | czas wstrzymania wysyłki po porażce; `0` wyłącza bezpiecznik |
+
+### Etap 6 — decyzje projektowe (91–127)
+
+91. **Ręczna instalacja Reverba** zamiast `install:broadcasting` / `reverb:install` —
+    kontrola nad każdym plikiem; instalatory dopisują trasy kanałów i zależności frontu.
+92. **Celowana aktualizacja zależności**: Guzzle 7 zamiast przeskoku całego drzewa
+    (3 pakiety w dół zamiast 34 zmian, framework bez zmiany wersji).
+93. **Krótkie timeouty klienta publikacji**: 0,5 s na połączenie, 1,5 s łącznie.
+94. **Rozdzielone adresy Reverba**: publikacja z kontenerów na `reverb:8080`,
+    klienci przez nginx `/app/`; osobne zmienne dla nasłuchu serwera.
+95. **Reverb za nginx, wystawione tylko `/app/`**; HTTP API publikacji niedostępne z zewnątrz.
+96. **`resolver` + zmienna w `proxy_pass`** — brak kontenera `reverb` nie wyłącza API.
+97. **Kontener `reverb` z kotwicy `x-php-app`**, uid 82, healthcheck `GET /up`, bez portów na hosta.
+98. **Własny endpoint autoryzacji** zamiast `Broadcast::routes()` — anonim na kanale seansu.
+99. **Mapa kanał → zasób → Policy, domyślnie odmowa**; podpis przez `authorizeChannel()`.
+100. **403 także dla nieistniejącego zasobu** — endpoint nie zdradza, które rezerwacje istnieją.
+101. **Surowe `{"auth"}`** jako jedyny świadomy wyjątek od koperty `data`.
+102. **`BookingPolicy::listen` węższe niż `view`** — administrator ma feed, nie podsłuch klienta.
+103. **Feed kina dla obsługi tego kina, feed sieci tylko dla administratora.**
+104. **503 `REALTIME_UNAVAILABLE`** dla broadcastera bez podpisów; odmowa pozostaje 403.
+105. **Limiter o dwóch progach** (60/min per klient, 1200/min per IP) — przetrwa burzę
+    reconnectów i salę za jednym NAT-em.
+106. **Licznik wersji per seans** podbijany upsertem jako ostatnia instrukcja transakcji.
+107. **Wersja w snapshocie jako dolna granica** — odczyt przed stanem miejsc.
+108. **`SELECT … FOR UPDATE` + `UPDATE` po `id`** — wersja obejmuje wyłącznie miejsca
+    zmienione w tej transakcji (sweep mógł część zwolnić wcześniej).
+109. **Wysyłka przez `DB::afterCommit` z jednego miejsca** (`SeatStateRecorder`) —
+    serwisy nie znają Reverba.
+110. **`ShouldBroadcastNow` bez kolejki.**
+111. **Awaria Reverba = ostrzeżenie w logu** (`RealtimeNotifier`), bez treści wyjątku (jak 62).
+112. **Stan absolutny, posortowany, bez danych osobowych**; jawne `broadcastWith()`,
+    bo bez niego Laravel wysłałby publiczne właściwości zdarzenia.
+113. **`seats.resync` zamiast dzielenia payloadu** — jedna wersja = jedno zdarzenie.
+114. **`event()` zamiast wstrzykniętego dispatchera** — `Event::fake()` działa w testach
+    niezależnie od chwili zbudowania serwisu.
+115. **„paid” ogłasza słuchacz `BookingPaid`**, nie `fulfil()` — bez sprzedaży, której nie było.
+116. **Status przejścia podaje wywołujący**, nie odczyt z bazy po COMMIT.
+117. **`booking.created` tylko do feedu** — nikt nie może jeszcze słuchać kanału rezerwacji.
+118. **Jedno zdarzenie feedu na dwa kanały** — jedno żądanie do Reverba.
+119. **Pola jak w REST** (`total`, `status_label`) i biała lista kluczy w testach.
+120. **`seats_count` z `seat_locks`** — są przypięte do rezerwacji przy każdym statusie.
+121. **Bez `tickets_ready`** — pobranie PDF-a generuje brakujący plik, a flaga
+    wprowadzałaby problem kolejności zdarzeń.
+122. **Bezpiecznik w cache z TTL**, `add()` = jeden log, *fail-open*, `BROADCAST_BREAKER_SECONDS`.
+123. **Sonda WebSocket w repozytorium** (`tools/realtime-probe`), `pusher-js` 8.6.0
+    przypięty z `package-lock.json`.
+124. **Node w kontenerze z UID użytkownika**; tokeny sondy w pliku `0600`, usuwane po teście.
+125. **Reconnect: REST → subskrypcja → ponowny odczyt wersji**; luka w numeracji → snapshot.
+126. **`allowed_origins` = `*`** — klienci mobilni i serwerowi nie wysyłają `Origin`,
+    a Reverb z listą odrzuca brak nagłówka; dane chronią podpisy kanałów i Policies.
+127. **`starts_at` w strefie kina, `occurred_at` w strefie aplikacji** — oba ISO 8601 z offsetem.
+
+### Etap 6 — pułapki, na które trafiliśmy (AI–AV)
+
+- **AI. Guzzle 8 kontra `guzzlehttp/psr7` 2.x.** `composer require laravel/reverb`
+  kończył się kodem 2; `-W` zmieniłby 34 pakiety razem z frameworkiem.
+  Rozwiązanie: `require --no-update`, potem `update` czterech wskazanych pakietów.
+- **AJ. Domyślne timeouty publikacji to 10 s i 30 s.** Przy niedziałającym
+  Reverbie blokada miejsca wisiałaby 10 sekund.
+- **AK. `Broadcast::routes()` odrzuca gościa przed callbackiem kanału** — kanał
+  seansu dla anonima wymagał własnego endpointu.
+- **AL. `NullBroadcaster` niczego nie sprawdza.** Test „odmowy” na
+  `BROADCAST_CONNECTION=null` jest fałszywie zielony — testy autoryzacji
+  przełączają się na broadcaster podpisujący z testowym kluczem.
+- **AM. `BroadcastManager` pamięta utworzone połączenia.** Zmiana configu
+  w teście nie działa bez `forgetDrivers()`.
+- **AN. Statyczny `proxy_pass http://reverb:8080`** — gdy kontenera nie ma,
+  nginx nie startuje wcale i pada całe API.
+- **AO. `sed -i` na pliku zamontowanym pojedynczo.** `sed` tworzy nowy plik
+  (nowy i-węzeł), a kontener dalej widzi stary.
+- **AP. Reverb odrzuca połączenie bez nagłówka `Origin`,** gdy `allowed_origins`
+  nie jest `*`. `pusher-js` w Node i klienci mobilni tego nagłówka nie wysyłają.
+- **AQ. `PusherBroadcaster` opakowuje `Pusher\ApiErrorException`
+  w `BroadcastException`** — klasa wyjątku zależy od tego, czy wołamy klienta
+  Pushera wprost, czy przez broadcaster.
+- **AR. Blok skopiowany bez pierwszej linii** (`cd ~/cinema && {`) — polecenia
+  wykonały się pojedynczo, a `cd` zmienił katalog powłoki.
+- **AS. Nowe pliki gotowe, łatka niezastosowana.** Testy padły na „zdarzenie
+  wysłane 0 razy”, a `wc -l` nowych plików się zgadzało. Przed testami:
+  `git status` musi pokazać `M` przy łatanych plikach.
+- **AT. Raport nadpisywany `>`, commit dopisywany `>>`.** Plik z samym wynikiem
+  commitu wyglądał na „zrobione”, choć pełnego zestawu nie uruchomiono.
+  Komenda commitu sprawdza teraz w raporcie `EXIT całość: 0`.
+- **AU. `pusher-js` 8 wymaga opcji `cluster`** nawet przy własnym `wsHost`.
+- **AV. Po restarcie Dockera / WSL** pełny zestaw kończy się `EXIT 1` bez linii
+  `Tests:`, a tinker wypisuje `Could not open input file: artisan` — nieaktualne
+  montowanie katalogu, pomaga `cinema-up`.
+
+### Etap 6 — testy
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `BroadcastingAuthTest` | 22 | kanał seansu (anonim, klient, odwołany, rozpoczęty, nieistniejący), kanał rezerwacji (właściciel przez token bearer, inny klient, administrator, anonim, nieistniejąca → 403), feed kina i sieci (obsługa swojego i innego kina, administrator, klient, anonim), nieznany kanał, walidacja, 503 bez podpisów, limiter |
+| `SeatStateVersionTest` | 14 | wersja raz na operację, retry i 409 bez wersji, zwolnienia, sweep per seans, bilety, wygaśnięcie (także po sweepie), wycofanie, `seat_state_version` w planie sali |
+| `SeatLockConcurrencyTest` | (3) | rozszerzony o wersję: 20 procesów na jedno miejsce → wersja 1, 10 różnych miejsc → 10 |
+| `SeatEventsBroadcastTest` | 12 | jedno zdarzenie na zmianę z tą samą wersją, po COMMIT i nigdy po ROLLBACK, zwolnienia i sweep, bilety, payload bez danych osobowych, `seats.resync`, prawdziwy broadcaster pod martwym adresem |
+| `BookingEventsBroadcastTest` | 13 | pełny payload feedu, podwójny checkout, ROLLBACK, przejścia (data provider), „paid” dopiero po capture, wycofanie biletów, biała lista kluczy, **nazwy kanałów ze zdarzeń przepuszczone przez prawdziwą autoryzację**, awaria Reverba |
+| `RealtimeCircuitBreakerTest` | 6 | broadcaster liczący próby: otwarcie, wygaśnięcie (`travel`), sukcesy, `0` wyłącza, checkout bez zapytania przy otwartym, awaria cache |
+| Etapy 1–5 | 141 | |
+| **Razem** | **208** | |
+
+### Etap 6 — weryfikacja na żywo
+
+- Handshake WebSocket `101` przez nginx `/app/`; `/apps/...` z zewnątrz → 404;
+  zatrzymany `reverb` → 502 wyłącznie na `/app/`, API działa.
+- Publikacja do niedostępnego hosta: 0,51 s zamiast 10,00 s.
+- Podpis kanału z endpointu porównany z niezależnie policzonym HMAC.
+- Blokada przez API przy zatrzymanym Reverbie: `201` w 0,55 s, ostrzeżenie w logu
+  (przed bezpiecznikiem).
+- Zdarzenia rezerwacji: publikacja na dwa kanały w 0,05 s, payload 385 bajtów.
+- Bezpiecznik: trzy cykle blokada/zwolnienie przy zatrzymanym Reverbie — pierwsza
+  blokada 0,70 s, kolejne operacje 0,04–0,06 s, klucz w Redisie z TTL 8 s,
+  **jedno** ostrzeżenie; po wygaśnięciu klucza wysyłka wraca, zero ostrzeżeń.
+- **Sonda `tools/realtime-probe`** (`pusher-js` w kontenerze Node, przez nginx):
+  **15/15 PASS** — dwóch anonimowych subskrybentów dostaje „held” i „free”
+  z tą samą wersją po blokadzie `curl`-em, klient traci połączenie i wraca
+  według algorytmu z wersją, właściciel dostaje status rezerwacji, administrator
+  identyczny wpis feedu na obu kanałach, a anonim i obcy klient dostają
+  `403 CHANNEL_FORBIDDEN` na cudzej rezerwacji i feedach.
+
+Sonda potrzebuje danych i tokenów przygotowanych w tinkerze; skrypt
+uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
+
+### Etap 6 — znane ograniczenia i co dalej
+
+- **Kanał seansu jest „prywatny” jako bramka, a nie tajemnica.** Subskrybować
+  może każdy, kto ogląda seans w sprzedaży; chroni go brak danych osobowych
+  w payloadzie, a nie podpis.
+- **Jedna instancja Reverba.** Skalowanie poziome wymaga włączenia skalowania
+  Reverba przez Redis pub/sub oraz load balancera przepuszczającego WebSocket.
+- **Brak `wss://` w środowisku deweloperskim** — TLS na nginx w Etapie 10.
+- **Po awarii Reverba wysyłka wraca najpóźniej po 10 s** (bezpiecznik). Klienci
+  wykrywają lukę po numerze wersji albo odświeżają stan przy reconnect.
+- **Teoretyczny deadlock** między `fulfil()` (blokady rezerwacji w kolejności
+  `seat_id`) a sweepem i `finish()` (kolejność `id`). PostgreSQL wykrywa go
+  i przerywa jedną transakcję: webhook Stripe'a zostanie ponowiony, sweep
+  wykona się w następnym przebiegu. Docelowo jedna kolejność blokad wszędzie.
+- **`payment_intent.payment_failed` nie jest rozgłaszane** — rezerwacja zostaje
+  `pending` (klient może poprawić dane karty w oknie płatności), a błąd karty
+  zna od razu ze Stripe.js.
+- **`occurred_at` w feedzie to chwila wysyłki**, nie znacznik z bazy. Feed jest
+  powiadomieniem; źródłem prawdy będzie lista rezerwacji w panelu (Etap 7).
+- **Sonda wywołuje zdarzenia rezerwacji próbną wysyłką**, a nie prawdziwym
+  checkoutem (ten tworzyłby płatność w Stripe) — przejścia pokrywają testy.
+- **`.env.example` ma `CACHE_STORE=database`**, a środowisko używa Redisa;
+  bez `APP_NAME` klucze w Redisie mają prefiks `laravel-…`. Porządek w Etapie 10.
