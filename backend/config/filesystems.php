@@ -33,7 +33,11 @@ return [
         'local' => [
             'driver' => 'local',
             'root' => storage_path('app/private'),
-            'serve' => true,
+            // Etap 7, blok F: bez trasy GET/PUT storage/{path}. Nikt jej nie używa
+            // (bilety PDF idą przez kontroler, podgląd Livewire ma własną trasę),
+            // a przejmowała każdy brakujący adres /storage/... dysku public i
+            // odpowiadała 403 zamiast 404.
+            'serve' => false,
             'throw' => false,
             'report' => false,
         ],

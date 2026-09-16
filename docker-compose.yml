@@ -22,6 +22,9 @@ x-php-app: &php-app
     # Bind mount: host code is visible inside the container.
     # Editing a file on the host takes effect immediately.
     - ./backend:/var/www/html
+    # Etap 7, blok F: limity wysyłania plików (plakaty). Tylko do odczytu.
+    # Po zmianie: up -d --force-recreate tych kontenerów + restart nginx (opis w pliku).
+    - ./docker/php/conf.d/uploads.ini:/usr/local/etc/php/conf.d/zz-uploads.ini:ro
   depends_on:
     postgres:
       condition: service_healthy
