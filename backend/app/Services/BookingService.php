@@ -64,15 +64,14 @@ class BookingService
         return DB::transaction(function () use ($screening, $sessionId, $user): Booking {
             $now = CarbonImmutable::now();
 
-            // Blokady sesji zamrożone na czas transakcji. orderBy('seat_id')
-            // to ta sama ochrona przed deadlockiem co w SeatLockService:
-            // wszyscy zakładają locki w tej samej kolejności.
+            // Blokady sesji zamrożone na czas transakcji. inLockOrder() to ta sama
+            // kolejność co we wszystkich ścieżkach blokujących seat_locks (blok J).
             $locks = SeatLock::query()
                 ->where('screening_id', $screening->id)
                 ->where('session_id', $sessionId)
                 ->whereNull('released_at')
                 ->where('expires_at', '>', $now)
-                ->orderBy('seat_id')
+                ->inLockOrder()
                 ->lockForUpdate()
                 ->get();
 
@@ -147,7 +146,7 @@ class BookingService
             $locks = SeatLock::query()
                 ->where('booking_id', $fresh->id)
                 ->whereNull('released_at')
-                ->orderBy('seat_id')
+                ->inLockOrder()
                 ->lockForUpdate()
                 ->get();
 
@@ -239,7 +238,7 @@ class BookingService
             $locks = SeatLock::query()
                 ->where('booking_id', $fresh->id)
                 ->whereNull('released_at')
-                ->orderBy('id')
+                ->inLockOrder()
                 ->lockForUpdate()
                 ->get(['id', 'seat_id']);
 

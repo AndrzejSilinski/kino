@@ -70,6 +70,22 @@ class SeatLock extends Model
         $query->whereNull('released_at')->where('expires_at', '<=', now());
     }
 
+    /**
+     * JEDYNA kolejność blokowania wierszy seat_locks (Etap 7, blok J).
+     *
+     * Każde SELECT … FOR UPDATE na tej tabeli idzie przez ten scope. Dwie transakcje
+     * blokujące te same wiersze w tej samej kolejności nie mogą się zakleszczyć:
+     * druga czeka na pierwszą zamiast trzymać wiersz, na który czeka pierwsza.
+     *
+     * Wśród niezwolnionych blokad para (screening_id, seat_id) jest unikalna
+     * (indeks seat_locks_active_unique), więc kolejność jest całkowita także
+     * w porcji sprzątania, która obejmuje wiele seansów.
+     */
+    public function scopeInLockOrder(Builder $query): void
+    {
+        $query->orderBy('screening_id')->orderBy('seat_id');
+    }
+
     public function isActive(): bool
     {
         return $this->released_at === null && $this->expires_at->isFuture();

@@ -208,10 +208,12 @@ class SeatLockService
             // FOR UPDATE: ktoś mógł zwolnić blokadę między SELECT-em a tą chwilą.
             // Wersja i zdarzenie mają opisywać wiersze zwolnione przez TĘ
             // transakcję, a nie wynik wcześniejszego SELECT-a (Etap 6).
+            // Porcję WYBIERAMY po id (stronicowanie), ale BLOKUJEMY w kolejności
+            // wspólnej dla całej aplikacji (blok J).
             $locks = SeatLock::query()
                 ->whereIn('id', $ids)
                 ->whereNull('released_at')
-                ->orderBy('id')
+                ->inLockOrder()
                 ->lockForUpdate()
                 ->get(['id', 'screening_id', 'seat_id']);
 
@@ -242,7 +244,7 @@ class SeatLockService
      * Zablokowane wiersze nie zmienią się pod nami, więc lista miejsc jest
      * dokładnie tą, którą zwolniła ta transakcja. Sam UPDATE zwraca tylko
      * liczbę, a wersja i zdarzenie potrzebują identyfikatorów miejsc.
-     * Kolejność po id — ta sama co w sweepExpired().
+     * Kolejność blokad: SeatLock::inLockOrder() — wspólna dla całej aplikacji (blok J).
      *
      * @param  Builder<SeatLock>  $query
      * @return int  liczba faktycznie zwolnionych blokad
@@ -252,7 +254,7 @@ class SeatLockService
         return DB::transaction(function () use ($screening, $query): int {
             $now = Carbon::now();
 
-            $locks = $query->orderBy('id')->lockForUpdate()->get(['id', 'seat_id']);
+            $locks = $query->inLockOrder()->lockForUpdate()->get(['id', 'seat_id']);
 
             if ($locks->isEmpty()) {
                 return 0;
@@ -437,11 +439,25 @@ class SeatLockService
      */
     private function releaseExpiredLocks(Screening $screening, array $seatIds, Carbon $now): int
     {
-        return SeatLock::query()
+        // Etap 7, blok J: najpierw FOR UPDATE we wspólnej kolejności, potem UPDATE po id.
+        // Sam UPDATE też blokuje wiersze, ale w kolejności wybranej przez planer zapytań,
+        // której nie kontrolujemy. FOR UPDATE ponownie sprawdza WHERE na najnowszej wersji
+        // wiersza (ten sam EvalPlanQual), więc blokada zwolniona w międzyczasie odpada.
+        $ids = SeatLock::query()
             ->where('screening_id', $screening->id)
             ->whereIn('seat_id', $seatIds)
             ->whereNull('released_at')
             ->where('expires_at', '<=', $now)
+            ->inLockOrder()
+            ->lockForUpdate()
+            ->pluck('id');
+
+        if ($ids->isEmpty()) {
+            return 0;
+        }
+
+        return SeatLock::query()
+            ->whereIn('id', $ids)
             ->update(['released_at' => $now, 'updated_at' => $now]);
     }
 }
