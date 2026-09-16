@@ -9,6 +9,8 @@ use App\Livewire\Admin\Halls\HallIndex;
 use App\Livewire\Admin\Halls\HallLayoutEditor;
 use App\Livewire\Admin\Movies\MovieForm;
 use App\Livewire\Admin\Movies\MovieIndex;
+use App\Livewire\Admin\Screenings\ScreeningForm;
+use App\Livewire\Admin\Screenings\ScreeningWeek;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -61,5 +63,14 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
             ->name('movies.create')->middleware('can:create,App\Models\Movie');
         Route::livewire('/movies/{movie}/edit', MovieForm::class)
             ->name('movies.edit')->middleware('can:update,movie');
+
+        // Repertuar (blok G2): siatkę kina widzi administrator i obsługa tego kina,
+        // planuje wyłącznie administrator.
+        Route::livewire('/cinemas/{cinema}/screenings', ScreeningWeek::class)
+            ->name('cinemas.screenings.index')->middleware('can:viewRepertoire,cinema');
+        Route::livewire('/cinemas/{cinema}/screenings/create', ScreeningForm::class)
+            ->name('cinemas.screenings.create')->middleware('can:create,App\Models\Screening');
+        Route::livewire('/screenings/{screening}/edit', ScreeningForm::class)
+            ->name('screenings.edit')->middleware('can:update,screening');
     });
 });

@@ -43,6 +43,8 @@
                         <td>
                             <a href="{{ route('admin.cinemas.edit', $cinema) }}">Edytuj</a>
                             ·
+                            <a href="{{ route('admin.cinemas.screenings.index', $cinema) }}">Repertuar</a>
+                            ·
                             <a href="#" wire:click.prevent="toggleActive({{ $cinema->id }})"
                                wire:confirm="{{ $cinema->is_active ? 'Wyłączyć kino '.$cinema->name.'?' : 'Włączyć kino '.$cinema->name.'?' }}">
                                 {{ $cinema->is_active ? 'Wyłącz' : 'Włącz' }}

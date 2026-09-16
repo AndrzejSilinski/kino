@@ -52,4 +52,18 @@ final class ScreeningPolicy
     {
         return $screening->status->isBookable() && $screening->starts_at->isFuture();
     }
+
+    /**
+     * Planowanie repertuaru w panelu (Etap 7, blok G2) — wyłącznie administrator.
+     * Czy KONKRETNY seans da się zmienić (sprzedaż, stan), rozstrzyga serwis.
+     */
+    public function create(User $user): bool
+    {
+        return $user->isAdmin();
+    }
+
+    public function update(User $user, Screening $screening): bool
+    {
+        return $user->isAdmin();
+    }
 }

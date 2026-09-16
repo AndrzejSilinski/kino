@@ -52,6 +52,15 @@ final class CinemaPolicy
         return $user->isAdmin();
     }
 
+    /**
+     * Siatka repertuaru kina w panelu (Etap 7, blok G2). Administrator — każde kino;
+     * obsługa — tylko swoje, do podglądu (planuje wyłącznie administrator).
+     */
+    public function viewRepertoire(User $user, Cinema $cinema): bool
+    {
+        return $this->viewSales($user, $cinema);
+    }
+
     public function create(User $user): bool
     {
         return $user->isAdmin();
