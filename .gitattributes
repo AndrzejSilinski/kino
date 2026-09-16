@@ -1,0 +1,17 @@
+# Etap 8, blok B: końce linii LF w całym repozytorium (backend/ ma własny, ten sam wzorzec).
+# Skrypty powłoki, pliki frontu i konfiguracja kontenerów działają w Linuksie;
+# CRLF z edytora w Windows psuje shebangi, heredoki i sumy SHA256 paczek.
+* text=auto eol=lf
+*.sh text eol=lf
+
+# Pliki binarne: bez konwersji końców linii i bez diffu tekstowego.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
