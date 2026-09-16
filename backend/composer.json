@@ -14,6 +14,7 @@
         "laravel/reverb": "^1.11",
         "laravel/sanctum": "^4.0",
         "laravel/tinker": "^3.0",
+        "livewire/livewire": "^4.4",
         "stripe/stripe-php": "^21.3"
     },
     "require-dev": {
