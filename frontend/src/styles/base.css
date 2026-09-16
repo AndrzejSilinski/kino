@@ -421,6 +421,10 @@ button:disabled {
 
 .seat-selection-layout {
   display: grid;
+  /* minmax(0, 1fr), a nie domyślna kolumna "auto": element siatki ma min-width: auto,
+     więc kolumna rosłaby do szerokości planu sali (width: max-content) i na telefonie
+     przewijała się CAŁA strona. Z zerowym minimum plan przewija się w .seat-map-scroll. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space);
 }
 
