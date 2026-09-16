@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources\V1;
 
+use App\Enums\BookingStatus;
 use App\Models\Booking;
 use App\Support\Labels;
 use App\Support\Money;
@@ -20,8 +21,9 @@ use Illuminate\Http\Resources\Json\JsonResource;
  *   user_id — odbiorca i tak jest właścicielem (pilnuje BookingPolicy),
  *     więc pole niosłoby wyłącznie informację o numeracji kont.
  *
- *   cancelled_by_user_id — kto anulował, to sprawa wewnętrzna kina.
- *     Klient dostaje sam powód, jeśli anulowanie nastąpiło.
+ *   cancelled_by_user_id i cancellation_reason — kto i dlaczego anulował,
+ *     to notatka wewnętrzna kina (Etap 7, blok K). Klient dostaje moment
+ *     anulowania i stan zwrotu pieniędzy.
  *
  * @mixin Booking
  */
@@ -49,7 +51,12 @@ class BookingResource extends JsonResource
                 $this->cancelled_at !== null,
                 fn (): array => [
                     'cancelled_at' => $this->cancelled_at?->toIso8601String(),
-                    'reason' => $this->cancellation_reason,
+                    // none — nic do zwrotu, pending — rozliczenie płatności w toku, refunded — pieniądze zwrócone.
+                    'refund' => match (true) {
+                        $this->status === BookingStatus::Refunded => 'refunded',
+                        $this->refund_requested_at !== null && $this->refund_completed_at === null => 'pending',
+                        default => 'none',
+                    },
                 ],
             ),
             'screening' => new ScreeningResource($this->whenLoaded('screening')),

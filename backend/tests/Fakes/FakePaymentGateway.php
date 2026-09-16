@@ -9,6 +9,7 @@ use App\Payments\PaymentIntentData;
 use App\Payments\PaymentIntentStatus;
 use App\Payments\StripePaymentGateway;
 use App\Payments\WebhookEventData;
+use Throwable;
 
 /**
  * Bramka płatności na potrzeby testów.
@@ -28,6 +29,60 @@ final class FakePaymentGateway implements PaymentGateway
 
     /** @var array<string, PaymentIntentData> */
     private array $intents = [];
+
+    /** @var array<string, list<Throwable>> wyjątki do rzucenia przy kolejnych wywołaniach operacji */
+    private array $failures = [];
+
+    /** Liczba odczytów stanu (retrieveIntent). Poza $calls, żeby nie zmieniać asercji starszych testów. */
+    public int $retrieves = 0;
+
+    /**
+     * Następne wywołanie operacji (retrieve, capture, cancel, refund) rzuci $e —
+     * np. PaymentProviderUnavailableException albo PaymentRejectedException (Etap 7, blok K).
+     */
+    public function failNext(string $operation, Throwable $e): void
+    {
+        $this->failures[$operation][] = $e;
+    }
+
+    /** Ustawia stan płatności widziany przez retrieveIntent — "co jest u operatora". */
+    public function setIntent(string $intentId, PaymentIntentStatus $status, int $amountMinor = 2500, ?string $bookingReference = null): void
+    {
+        $this->intents[$intentId] = new PaymentIntentData(
+            id: $intentId,
+            status: $status,
+            amountMinor: $amountMinor,
+            amountCapturableMinor: $status === PaymentIntentStatus::RequiresCapture ? $amountMinor : 0,
+            amountReceivedMinor: $status === PaymentIntentStatus::Succeeded ? $amountMinor : 0,
+            currency: 'PLN',
+            bookingReference: $bookingReference,
+        );
+    }
+
+    /** @return list<string> klucze idempotencji w kolejności wywołań */
+    public function keys(): array
+    {
+        return array_column($this->calls, 'key');
+    }
+
+    private function throwIfFailing(string $operation): void
+    {
+        if (($this->failures[$operation] ?? []) !== []) {
+            throw array_shift($this->failures[$operation]);
+        }
+    }
+
+    private function current(string $intentId): PaymentIntentData
+    {
+        return $this->intents[$intentId] ?? new PaymentIntentData(
+            id: $intentId,
+            status: PaymentIntentStatus::RequiresCapture,
+            amountMinor: 0,
+            amountCapturableMinor: 0,
+            amountReceivedMinor: 0,
+            currency: 'PLN',
+        );
+    }
 
     public function createIntent(
         int $amountMinor,
@@ -54,20 +109,17 @@ final class FakePaymentGateway implements PaymentGateway
 
     public function retrieveIntent(string $intentId): PaymentIntentData
     {
-        return $this->intents[$intentId] ?? new PaymentIntentData(
-            id: $intentId,
-            status: PaymentIntentStatus::RequiresCapture,
-            amountMinor: 0,
-            amountCapturableMinor: 0,
-            amountReceivedMinor: 0,
-            currency: 'PLN',
-        );
+        $this->retrieves++;
+        $this->throwIfFailing('retrieve');
+
+        return $this->current($intentId);
     }
 
     public function captureIntent(string $intentId, string $idempotencyKey): PaymentIntentData
     {
         $this->record('capture', $intentId, $idempotencyKey);
-        $intent = $this->retrieveIntent($intentId);
+        $this->throwIfFailing('capture');
+        $intent = $this->current($intentId);
 
         return $this->intents[$intentId] = new PaymentIntentData(
             id: $intentId,
@@ -83,7 +135,8 @@ final class FakePaymentGateway implements PaymentGateway
     public function cancelIntent(string $intentId, string $idempotencyKey): PaymentIntentData
     {
         $this->record('cancel', $intentId, $idempotencyKey);
-        $intent = $this->retrieveIntent($intentId);
+        $this->throwIfFailing('cancel');
+        $intent = $this->current($intentId);
 
         return $this->intents[$intentId] = new PaymentIntentData(
             id: $intentId,
@@ -99,6 +152,7 @@ final class FakePaymentGateway implements PaymentGateway
     public function refundIntent(string $intentId, string $idempotencyKey): void
     {
         $this->record('refund', $intentId, $idempotencyKey);
+        $this->throwIfFailing('refund');
     }
 
     /** Podpis sprawdza PRAWDZIWY adapter — atrapa nie udaje kryptografii. */

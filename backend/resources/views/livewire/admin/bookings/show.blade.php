@@ -6,6 +6,10 @@
         <p><a href="{{ route('admin.bookings.index') }}">&larr; Rezerwacje</a> · godziny w strefie {{ $timezone }}</p>
     </hgroup>
 
+    @if ($notice)
+        <article role="status">{{ $notice }}</article>
+    @endif
+
     <div class="grid">
         <article>
             <header><strong>Status: {{ $statuses[$booking->status->value] ?? $booking->status->value }}</strong></header>
@@ -21,6 +25,17 @@
             @endif
             @if ($booking->stripe_payment_intent_id)
                 <p><small>Płatność Stripe: …{{ substr($booking->stripe_payment_intent_id, -6) }}</small></p>
+            @endif
+            @if ($booking->refund_requested_at)
+                <p><small>Rozliczenie płatności:
+                    @if ($booking->refund_completed_at === null)
+                        w toku od {{ $at($booking->refund_requested_at) }} — ponawiane automatycznie
+                    @elseif ($booking->status->value === 'refunded')
+                        pieniądze zwrócone {{ $at($booking->refund_completed_at) }}
+                    @else
+                        płatność anulowana przed pobraniem {{ $at($booking->refund_completed_at) }}
+                    @endif
+                </small></p>
             @endif
         </article>
         <article>
@@ -54,4 +69,31 @@
             @endforelse
         </tbody>
     </table>
+
+    @if ($canCancel)
+        <article>
+            <header><strong>Anulowanie rezerwacji</strong></header>
+            @if ($cancelBlocked)
+                <p>{{ $cancelBlocked }}</p>
+            @else
+                <form wire:submit="cancelBooking"
+                      wire:confirm="Anulować rezerwację {{ $booking->reference }}? Tej operacji nie można cofnąć.">
+                    <label>
+                        Powód anulowania (10–255 znaków, widzą go tylko administratorzy)
+                        <textarea wire:model="reason" rows="2" maxlength="255" @error('reason') aria-invalid="true" @enderror></textarea>
+                        @error('reason') <small role="alert">{{ $message }}</small> @enderror
+                    </label>
+                    <p><small>
+                        @if ($booking->status->value === 'paid')
+                            Bilety staną się nieważne, miejsca wrócą do sprzedaży, a {{ $money($booking->total_amount) }} wróci do klienta.
+                        @else
+                            Miejsca wrócą do sprzedaży, a rozpoczęta płatność zostanie anulowana.
+                        @endif
+                        Klient dostanie e-mail bez treści powodu.
+                    </small></p>
+                    <button type="submit" class="secondary" wire:loading.attr="disabled">Anuluj rezerwację</button>
+                </form>
+            @endif
+        </article>
+    @endif
 </section>

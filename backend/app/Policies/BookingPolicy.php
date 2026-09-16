@@ -67,15 +67,16 @@ class BookingPolicy
     }
 
     /**
-     * Anulowanie rezerwacji przez klienta.
+     * Anulowanie rezerwacji z powodem i rozliczeniem płatności (Etap 7, blok K).
      *
-     * Na razie nikt — anulowanie i zwroty to temat Etapu 4 (Stripe),
-     * bo wiążą się ze zwrotem płatności. Metoda istnieje, żeby było
-     * widać, że ten przypadek został przemyślany, a nie pominięty.
+     * WYŁĄCZNIE administrator — także nie obsługa kina (panel obsługi jest tylko
+     * do odczytu) i nie klient (samodzielna rezygnacja ze zwrotem nie jest w zakresie
+     * zadania). Czy rezerwację W OGÓLE da się anulować (status, start seansu,
+     * wykorzystane bilety), rozstrzyga BookingService pod blokadą, a nie policy.
      */
     public function cancel(User $user, Booking $booking): bool
     {
-        return false;
+        return $user->isAdmin();
     }
 
     /**

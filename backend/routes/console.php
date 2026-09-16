@@ -100,3 +100,19 @@ Schedule::command('cinema:screenings:send-reminders')
     ->onOneServer()
     ->runInBackground()
     ->appendOutputTo($output);
+
+/*
+ * Ponawianie rozliczeń płatności rezerwacji anulowanych przez administratora
+ * (Etap 7, blok K).
+ *
+ * everyFiveMinutes() — panel rozlicza płatność od razu; tu trafiają tylko
+ * przypadki, w których operator był niedostępny albo płatność była w toku.
+ * Przebieg woła Stripe'a, więc withoutOverlapping(). Równoległe wywołanie
+ * z panelem jest bezpieczne: te same klucze idempotencji i FOR UPDATE w kroku 3.
+ */
+Schedule::command('cinema:bookings:retry-refunds')
+    ->everyFiveMinutes()
+    ->withoutOverlapping(10)
+    ->onOneServer()
+    ->runInBackground()
+    ->appendOutputTo($output);

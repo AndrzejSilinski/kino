@@ -7,6 +7,7 @@ namespace App\Services;
 use App\Enums\BookingStatus;
 use App\Enums\TicketStatus;
 use App\Exceptions\BookingAlreadyPendingException;
+use App\Exceptions\BookingCancellationException;
 use App\Exceptions\BookingNotPayableException;
 use App\Exceptions\EmptyCartException;
 use App\Exceptions\SeatsUnavailableException;
@@ -134,7 +135,10 @@ class BookingService
 
             $fresh = Booking::query()->whereKey($booking->id)->lockForUpdate()->firstOrFail();
 
-            if ($fresh->tickets()->exists()) {
+            // Idempotencja tylko dla OPŁACONEJ. Bilety ma też rezerwacja anulowana po
+            // opłaceniu (bilety cancelled, blok K) — powtórzony webhook nie może jej
+            // potraktować jak opłaconej i pobrać pieniędzy.
+            if ($fresh->status === BookingStatus::Paid && $fresh->tickets()->exists()) {
                 return $fresh;
             }
 
@@ -233,26 +237,13 @@ class BookingService
                 return false;
             }
 
-            // FOR UPDATE zamiast samego UPDATE: sweep mógł część blokad zwolnić
-            // wcześniej. Wersja ma objąć tylko miejsca zwolnione TUTAJ (Etap 6).
-            $locks = SeatLock::query()
-                ->where('booking_id', $fresh->id)
-                ->whereNull('released_at')
-                ->inLockOrder()
-                ->lockForUpdate()
-                ->get(['id', 'seat_id']);
-
-            if ($locks->isNotEmpty()) {
-                SeatLock::query()
-                    ->whereIn('id', $locks->pluck('id'))
-                    ->update(['released_at' => $now, 'updated_at' => $now]);
-            }
+            $seatIds = $this->releaseLocksOf($fresh, $now);
 
             $fresh->status = $status;
             $fresh->save();
 
             $this->seatStates->record((int) $fresh->screening_id, [
-                SeatStateRecorder::FREE => $locks->pluck('seat_id')->all(),
+                SeatStateRecorder::FREE => $seatIds,
             ]);
 
             // Po seats.changed (zarejestrowanym wyżej) — ta sama kolejność po COMMIT.
@@ -261,6 +252,33 @@ class BookingService
 
             return true;
         });
+    }
+
+    /**
+     * Zwalnia niezwolnione blokady rezerwacji i zwraca ich miejsca.
+     * Wołać pod FOR UPDATE na wierszu rezerwacji.
+     *
+     * FOR UPDATE zamiast samego UPDATE: sweep mógł część blokad zwolnić
+     * wcześniej. Wersja ma objąć tylko miejsca zwolnione TUTAJ (Etap 6).
+     *
+     * @return list<int>
+     */
+    private function releaseLocksOf(Booking $fresh, CarbonImmutable $now): array
+    {
+        $locks = SeatLock::query()
+            ->where('booking_id', $fresh->id)
+            ->whereNull('released_at')
+            ->inLockOrder()
+            ->lockForUpdate()
+            ->get(['id', 'seat_id']);
+
+        if ($locks->isNotEmpty()) {
+            SeatLock::query()
+                ->whereIn('id', $locks->pluck('id'))
+                ->update(['released_at' => $now, 'updated_at' => $now]);
+        }
+
+        return $locks->pluck('seat_id')->all();
     }
 
     /** @param Collection<int, SeatLock> $locks */
@@ -272,9 +290,14 @@ class BookingService
             return null;
         }
 
+        // ZWYKŁY ODCZYT, bez FOR UPDATE (Etap 7, blok K). Kolejność blokad w całej
+        // aplikacji to: rezerwacja -> seat_locks -> bilety -> wersja miejsc. Tutaj
+        // trzymamy już seat_locks, więc blokada rezerwacji odwróciłaby kolejność
+        // i dała deadlock z finish()/cancelByAdmin(). Odczyt bez blokady jest
+        // bezpieczny: jeśli rezerwację właśnie anulowano, płatność i tak zostanie
+        // odrzucona — fulfil() sprawdza status pod blokadą.
         $booking = Booking::query()
             ->whereKey($attached->first()->booking_id)
-            ->lockForUpdate()
             ->first();
 
         $sameSet = $attached->count() === $locks->count()
@@ -374,5 +397,155 @@ class BookingService
 
             return true;
         });
+    }
+
+    /**
+     * Anulowanie przez administratora — krok 1 z 3, WYŁĄCZNIE baza (Etap 7, blok K).
+     *
+     * Rozmowę z operatorem płatności (krok 2) i zapis jej wyniku (krok 3) prowadzi
+     * PaymentService, PO zatwierdzeniu tej transakcji: żądanie HTTP nie może trzymać
+     * blokady wiersza rezerwacji.
+     *
+     * pending — to samo przejście co cancel(): blokady miejsc zwolnione.
+     * paid    — seans nierozpoczęty i żaden bilet niewykorzystany; bilety cancelled
+     *           wypadają z indeksu tickets_active_seat_unique, miejsca wracają do puli.
+     *
+     * refund_requested_at dostaje każda rezerwacja z płatnością u operatora — także
+     * pending: klient mógł właśnie zapłacić BLIK-iem albo mieć autoryzację na karcie.
+     *
+     * KOLEJNOŚĆ BLOKAD: rezerwacja -> seat_locks albo bilety -> wersja miejsc.
+     * Bilety blokujemy jawnie PRZED sprawdzeniem "żaden nie wykorzystany": skaner
+     * oznacza bilet atomowym UPDATE … WHERE status = 'valid', który poczeka na nas,
+     * a po COMMIT nie znajdzie już ważnego biletu. Bez tej blokady skan między
+     * sprawdzeniem a UPDATE-em zamieniłby wykorzystany bilet w anulowany.
+     *
+     * @throws BookingCancellationException
+     */
+    public function cancelByAdmin(Booking $booking, User $admin, string $reason): Booking
+    {
+        $reason = trim($reason);
+        $length = mb_strlen($reason);
+
+        if ($length < BookingCancellationException::REASON_MIN || $length > BookingCancellationException::REASON_MAX) {
+            throw BookingCancellationException::invalidReason();
+        }
+
+        return DB::transaction(function () use ($booking, $admin, $reason): Booking {
+            $now = CarbonImmutable::now();
+
+            $fresh = Booking::query()->whereKey($booking->id)->lockForUpdate()->firstOrFail();
+
+            $seatIds = match ($fresh->status) {
+                BookingStatus::Pending => $this->releaseLocksOf($fresh, $now),
+                BookingStatus::Paid => $this->cancelTicketsOf($fresh, $now),
+                default => throw BookingCancellationException::wrongStatus($fresh->status),
+            };
+
+            $fresh->status = BookingStatus::Cancelled;
+            $fresh->cancelled_at = $now;
+            $fresh->cancellation_reason = $reason;
+            $fresh->cancelled_by_user_id = $admin->id;
+            $fresh->refund_requested_at = $fresh->stripe_payment_intent_id === null ? null : $now;
+            $fresh->save();
+
+            $this->seatStates->record((int) $fresh->screening_id, [
+                SeatStateRecorder::FREE => $seatIds,
+            ]);
+
+            $bookingId = (int) $fresh->id;
+            DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, BookingStatus::Cancelled));
+
+            return $fresh;
+        });
+    }
+
+    /**
+     * Anulowanie przez administratora — krok 3 z 3: operator potwierdził rozliczenie.
+     *
+     * $moneyReturned = true: pieniądze były pobrane i wróciły -> status refunded
+     * (wpis booking.refunded w feedzie). false: zwolniona tylko autoryzacja ->
+     * status zostaje cancelled, bo klient nigdy nie zapłacił.
+     *
+     * Idempotentne pod FOR UPDATE: drugi proces (komenda z harmonogramu równolegle
+     * z panelem) zastaje refund_completed_at i nic nie zmienia.
+     */
+    public function completeRefund(Booking $booking, bool $moneyReturned): bool
+    {
+        return DB::transaction(function () use ($booking, $moneyReturned): bool {
+            $fresh = Booking::query()->whereKey($booking->id)->lockForUpdate()->firstOrFail();
+
+            if ($fresh->refund_requested_at === null || $fresh->refund_completed_at !== null) {
+                return false;
+            }
+
+            $fresh->refund_completed_at = CarbonImmutable::now();
+
+            if ($moneyReturned) {
+                $fresh->status = BookingStatus::Refunded;
+            }
+
+            $fresh->save();
+
+            if ($moneyReturned) {
+                $bookingId = (int) $fresh->id;
+                DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, BookingStatus::Refunded));
+            }
+
+            return true;
+        });
+    }
+
+    /**
+     * Zaległe rozliczenia — wejście dla komendy ponawiającej. Indeks bookings_refund_pending.
+     *
+     * $olderThanSeconds omija świeże anulowania, które panel właśnie rozlicza sam:
+     * równoległe wywołanie byłoby bezpieczne (te same klucze idempotencji), ale zbędne.
+     *
+     * @return Collection<int, Booking>
+     */
+    public function dueForRefundRetry(int $limit, int $olderThanSeconds): Collection
+    {
+        return Booking::query()
+            ->whereNotNull('refund_requested_at')
+            ->whereNull('refund_completed_at')
+            ->where('refund_requested_at', '<=', CarbonImmutable::now()->subSeconds($olderThanSeconds))
+            ->orderBy('refund_requested_at')
+            ->limit($limit)
+            ->get();
+    }
+
+    /**
+     * Bilety opłaconej rezerwacji -> cancelled. Zwraca miejsca do zwolnienia.
+     * Wołać pod FOR UPDATE na wierszu rezerwacji.
+     *
+     * @return list<int>
+     *
+     * @throws BookingCancellationException
+     */
+    private function cancelTicketsOf(Booking $fresh, CarbonImmutable $now): array
+    {
+        if ($fresh->screening->starts_at->lessThanOrEqualTo($now)) {
+            throw BookingCancellationException::screeningStarted();
+        }
+
+        $tickets = Ticket::query()
+            ->where('booking_id', $fresh->id)
+            ->orderBy('id')
+            ->lockForUpdate()
+            ->get(['id', 'seat_id', 'status']);
+
+        $used = $tickets->where('status', TicketStatus::Used)->count();
+
+        if ($used > 0) {
+            throw BookingCancellationException::ticketsUsed($used);
+        }
+
+        $active = $tickets->where('status', TicketStatus::Valid);
+
+        Ticket::query()
+            ->whereIn('id', $active->pluck('id'))
+            ->update(['status' => TicketStatus::Cancelled, 'updated_at' => $now]);
+
+        return $active->pluck('seat_id')->all();
     }
 }

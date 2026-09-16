@@ -6,16 +6,22 @@ namespace App\Services;
 
 use App\Enums\BookingStatus;
 use App\Events\BookingPaid;
+use App\Exceptions\BookingCancellationException;
 use App\Exceptions\BookingNotPayableException;
+use App\Exceptions\PaymentProviderUnavailableException;
 use App\Exceptions\PaymentRejectedException;
 use App\Exceptions\SeatsUnavailableException;
 use App\Models\Booking;
 use App\Models\Screening;
 use App\Models\User;
+use App\Notifications\BookingCancelledByCinema;
 use App\Payments\PaymentGateway;
 use App\Payments\PaymentIntentData;
+use App\Payments\PaymentIntentStatus;
+use App\Payments\RefundOutcome;
 use App\Payments\WebhookEventData;
 use Illuminate\Support\Facades\Log;
+use Throwable;
 
 /**
  * Spina stan rezerwacji ze stanem płatności u dostawcy.
@@ -30,6 +36,12 @@ use Illuminate\Support\Facades\Log;
  */
 class PaymentService
 {
+    /** Kod błędu Stripe'a dla zwrotu, który już się odbył — traktujemy jak sukces. */
+    public const PROVIDER_ALREADY_REFUNDED = 'charge_already_refunded';
+
+    /** Komenda ponawiająca pomija rozliczenia młodsze niż tyle sekund (panel rozlicza je sam). */
+    public const REFUND_RETRY_AFTER_SECONDS = 120;
+
     public function __construct(
         private readonly PaymentGateway $gateway,
         private readonly BookingService $bookings,
@@ -115,6 +127,15 @@ class PaymentService
             Log::warning('Zdarzenie Stripe bez rezerwacji.', ['intent' => $intent->id]);
 
             return 'unknown_booking';
+        }
+
+        if ($booking->refund_requested_at !== null) {
+            // Anulowana przez administratora (Etap 7, blok K). Płatność rozlicza
+            // settleRefund() na podstawie BIEŻĄCEGO stanu u operatora, a nie treści
+            // zdarzenia, które mogło przyjść z opóźnieniem albo nie po kolei.
+            // Bez tej gałęzi spóźnione amount_capturable_updated pobrałoby pieniądze
+            // za anulowaną rezerwację, a succeeded zleciłoby drugi zwrot.
+            return 'admin_cancelled';
         }
 
         return match ($event->type) {
@@ -258,6 +279,125 @@ class PaymentService
             (string) $booking->stripe_payment_intent_id,
             $this->key($booking, 'capture'),
         );
+    }
+
+    /**
+     * Anulowanie rezerwacji przez administratora (Etap 7, blok K).
+     *
+     * Krok 1 — BookingService::cancelByAdmin(): transakcja w bazie, miejsca wracają
+     *          do sprzedaży NATYCHMIAST, niezależnie od operatora płatności.
+     * Krok 2 — settleRefund(): po COMMIT, rozmowa z operatorem.
+     * Krok 3 — BookingService::completeRefund(): zapis wyniku.
+     *
+     * Porażka kroku 2 nie cofa kroku 1: rozliczenie zostaje na liście zaległych
+     * (refund_requested_at bez refund_completed_at) i ponowi je komenda.
+     *
+     * @throws BookingCancellationException
+     */
+    public function cancelByAdmin(Booking $booking, User $admin, string $reason): RefundOutcome
+    {
+        $cancelled = $this->bookings->cancelByAdmin($booking, $admin, $reason);
+
+        $outcome = $cancelled->refund_requested_at === null
+            ? RefundOutcome::NotRequired
+            : $this->settleRefund($cancelled);
+
+        // Mail na końcu: najpierw pieniądze, potem powiadomienie (jak decyzja 72).
+        // Awaria kolejki nie może zamienić udanego anulowania w błąd panelu.
+        try {
+            $cancelled->user()->firstOrFail()->notify(new BookingCancelledByCinema((int) $cancelled->id));
+        } catch (Throwable $e) {
+            report($e);
+        }
+
+        return $outcome;
+    }
+
+    /**
+     * Rozliczenie płatności anulowanej rezerwacji — decyzja z BIEŻĄCEGO stanu u operatora.
+     *
+     * Stan odczytujemy (retrieveIntent), zamiast zgadywać z naszej bazy: status paid
+     * nie mówi, czy capture już się odbył (fulfil ustawia paid PRZED capture).
+     *
+     *   da się anulować (w tym requires_capture) -> cancelIntent, klucz "cancel"
+     *   canceled                                -> nic do zrobienia
+     *   succeeded                               -> refundIntent, klucz "refund"
+     *   processing / nieznany                   -> zostaw do ponowienia
+     *
+     * Klucze są TE SAME co w obsłudze webhooków i wygaszaniu, więc równoległe
+     * wywołania (panel, komenda, webhook sprzed anulowania) nie zrobią dwóch zwrotów.
+     * Klucz idempotencji Stripe'a żyje 24 godziny — na później zostaje kod
+     * charge_already_refunded, który też oznacza sukces.
+     */
+    public function settleRefund(Booking $booking): RefundOutcome
+    {
+        if ($booking->refund_requested_at === null || $booking->stripe_payment_intent_id === null) {
+            return RefundOutcome::NotRequired;
+        }
+
+        $intentId = (string) $booking->stripe_payment_intent_id;
+
+        try {
+            $intent = $this->gateway->retrieveIntent($intentId);
+
+            if ($intent->status->isCancelable()) {
+                $this->gateway->cancelIntent($intentId, $this->key($booking, 'cancel'));
+                $moneyReturned = false;
+            } elseif ($intent->status === PaymentIntentStatus::Canceled) {
+                $moneyReturned = false;
+            } elseif ($intent->status === PaymentIntentStatus::Succeeded) {
+                $this->refund($booking, $intentId);
+                $moneyReturned = true;
+            } else {
+                Log::info('Rozliczenie anulowanej rezerwacji odłożone: płatność w toku.', [
+                    'booking' => $booking->reference,
+                    'intent_status' => $intent->status->value,
+                ]);
+
+                return RefundOutcome::Pending;
+            }
+        } catch (PaymentProviderUnavailableException|PaymentRejectedException $e) {
+            // Najczęściej: capture wyprzedził nasze anulowanie autoryzacji. Następna
+            // próba odczyta succeeded i zleci zwrot.
+            Log::warning('Rozliczenie anulowanej rezerwacji nie powiodło się; ponowi je harmonogram.', [
+                'booking' => $booking->reference,
+                'code' => $e->errorCode(),
+                'provider_code' => $e instanceof PaymentRejectedException ? $e->providerCode : null,
+            ]);
+
+            return RefundOutcome::Pending;
+        }
+
+        $this->bookings->completeRefund($booking, $moneyReturned);
+
+        return $moneyReturned ? RefundOutcome::Refunded : RefundOutcome::Voided;
+    }
+
+    /**
+     * Ponawia zaległe rozliczenia. Wejście dla schedulera.
+     *
+     * @return array<string, int> liczba rezerwacji według wyniku (RefundOutcome)
+     */
+    public function retryRefunds(int $limit = 50): array
+    {
+        $counts = array_fill_keys(array_column(RefundOutcome::cases(), 'value'), 0);
+
+        foreach ($this->bookings->dueForRefundRetry($limit, self::REFUND_RETRY_AFTER_SECONDS) as $booking) {
+            $counts[$this->settleRefund($booking)->value]++;
+        }
+
+        return $counts;
+    }
+
+    private function refund(Booking $booking, string $intentId): void
+    {
+        try {
+            $this->gateway->refundIntent($intentId, $this->key($booking, 'refund'));
+        } catch (PaymentRejectedException $e) {
+            if ($e->providerCode !== self::PROVIDER_ALREADY_REFUNDED) {
+                throw $e;
+            }
+        }
     }
 
     /**
