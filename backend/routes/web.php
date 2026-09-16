@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Admin\Auth\LoginController;
+use App\Http\Controllers\Admin\BroadcastingAuthController;
+use App\Http\Middleware\ForceJsonResponse;
 use App\Livewire\Admin\Bookings\BookingIndex;
 use App\Livewire\Admin\Bookings\BookingShow;
 use App\Livewire\Admin\Cinemas\CinemaForm;
@@ -37,6 +39,13 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         Route::get('/login', [LoginController::class, 'create'])->name('login');
         Route::post('/login', [LoginController::class, 'store'])->name('login.store');
     });
+
+    // Podpisy kanałów WebSocket dla pulpitu (blok L). Poza grupą niżej, bo ForceJsonResponse
+    // musi zadziałać PRZED auth: gość dostaje 401 w JSON-ie zamiast przekierowania.
+    // CSRF sprawdza grupa 'web' (Echo wysyła X-CSRF-TOKEN z <meta>).
+    Route::post('/broadcasting/auth', BroadcastingAuthController::class)
+        ->middleware([ForceJsonResponse::class, 'auth', 'can:panel.access', 'throttle:panel-broadcasting-auth'])
+        ->name('broadcasting.auth');
 
     Route::middleware(['auth', 'can:panel.access'])->group(function (): void {
         Route::post('/logout', [LoginController::class, 'destroy'])->name('logout');

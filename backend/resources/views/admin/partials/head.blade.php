@@ -8,3 +8,5 @@
 <title>{{ isset($title) ? $title.' · ' : '' }}Panel kina</title>
 {{-- Zasoby lokalne i przypięte (tools/admin-assets): bez CDN i bez kroku budowania. --}}
 <link rel="stylesheet" href="{{ asset('vendor/admin/pico.min.css') }}">
+{{-- Skrypty strony (np. Echo na pulpicie, blok L) — ładowane PRZED skryptem Livewire z końca <body>. --}}
+@stack('head')

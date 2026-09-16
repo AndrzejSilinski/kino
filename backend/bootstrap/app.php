@@ -2,6 +2,8 @@
 
 use App\Exceptions\CinemaException;
 use App\Http\ApiExceptionRenderer;
+use App\Http\Middleware\ForceJsonResponse;
+use Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -28,6 +30,12 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Zalogowany, który otworzy /admin/login (middleware 'guest'), wraca na pulpit.
         $middleware->redirectUsersTo(fn (): string => route('admin.dashboard'));
+
+        // Autoryzacja kanałów panelu (blok L): ForceJsonResponse musi zadziałać PRZED auth.
+        // Kolejność z ->middleware([...]) na trasie nie wystarcza — Laravel sortuje middleware
+        // według listy priorytetów i przesuwa auth przed SubstituteBindings z grupy 'web',
+        // czyli przed wszystko, co nie jest na tej liście (pułapka BR).
+        $middleware->prependToPriorityList(AuthenticatesRequests::class, ForceJsonResponse::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Żądania do /api/* i te z Accept: application/json dostają JSON

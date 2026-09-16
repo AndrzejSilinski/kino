@@ -47,5 +47,14 @@ final class RealtimeServiceProvider extends ServiceProvider
                 Limit::perMinute(1200)->by('broadcasting-auth-ip:'.$request->ip()),
             ];
         });
+
+        /*
+         * Autoryzacja kanałów panelu (Etap 7, blok L): trasa za auth, więc zawsze
+         * jest użytkownik z sesji (guard web). Pulpit subskrybuje jeden kanał;
+         * 30/min wystarcza z zapasem na reconnecty i kilka otwartych kart.
+         * Klucz inny niż w API — limity panelu i aplikacji klienta się nie mieszają.
+         */
+        RateLimiter::for('panel-broadcasting-auth', static fn (Request $request): Limit => Limit::perMinute(30)
+            ->by('panel-broadcasting-auth:'.$request->user('web')?->getAuthIdentifier()));
     }
 }
