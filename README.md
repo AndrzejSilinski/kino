@@ -14,6 +14,7 @@ bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
 | Serwer WWW | nginx + PHP-FPM (Alpine) | |
 | Zadania w tle | kontenery `worker` (`queue:work`) i `scheduler` (`schedule:work`) | |
 | WebSocket | Laravel Reverb (protokół Pushera) za nginx, kontener `reverb` | patrz Etap 6 |
+| Panel administracyjny | Livewire 4 + Alpine, Pico CSS, bez kroku budowania | patrz Etap 7 |
 | Płatności | Stripe (Payment Intents, `stripe/stripe-php`) | patrz Etap 4 |
 | Bilety | `endroid/qr-code` (QR), `dompdf/dompdf` (PDF) | patrz Etap 5 |
 | Poczta w środowisku deweloperskim | Mailpit | następca nierozwijanego Mailhoga |
@@ -52,8 +53,10 @@ sed -i "s/^REVERB_APP_SECRET=.*/REVERB_APP_SECRET=$(openssl rand -hex 20)/" back
 # uzupełnij ręcznie w backend/.env (Dashboard Stripe → Developers → API keys).
 
 # Worker i scheduler działają jako www-data (uid 82) i zapisują do storage/.
-mkdir -p backend/storage/app/private/tickets backend/storage/fonts
+mkdir -p backend/storage/app/private/tickets backend/storage/app/public backend/storage/fonts
 chmod -R a+rwX backend/storage backend/bootstrap/cache
+# Plakaty filmów spod /storage (Etap 7): względne dowiązanie, działa w WSL i w kontenerze.
+ln -s ../storage/app/public backend/public/storage
 
 docker compose up --build -d
 docker compose exec php composer install
@@ -69,6 +72,7 @@ Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
 |---|---|
 | <http://localhost:8080/api/v1> | REST API |
 | <http://localhost:8080/docs/api> | dokumentacja API (Scramble) |
+| <http://localhost:8080/admin> | panel administracyjny (administrator i obsługa kina), patrz Etap 7 |
 | <http://localhost:8025> | Mailpit — cała poczta wysłana przez aplikację |
 | `ws://localhost:8080/app/{REVERB_APP_KEY}` | WebSocket (Reverb przez nginx), patrz Etap 6 |
 
@@ -99,10 +103,14 @@ cinema/
 ├── docker/
 │   ├── nginx/default.conf    /app/ do Reverba, reszta poza public/ do PHP-FPM
 │   ├── php/Dockerfile        PHP 8.4-FPM Alpine: pdo_pgsql, redis, gd, intl, pcntl, zbar
+│   ├── php/conf.d/uploads.ini  (Etap 7) limity wysyłania plików PHP, podpięte jako wolumen
 │   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
 ├── backend/                  aplikacja Laravel (API, kolejki, scheduler)
 │   ├── app/
 │   │   ├── Services/         logika biznesowa: blokady, rezerwacje, płatności, bilety
+│   │   ├── Services/Admin/   (Etap 7) logika panelu: kina, sale, układy, filmy, seanse, artykuły, pulpit
+│   │   ├── Livewire/Admin/   (Etap 7) komponenty panelu — tylko dane formularza i wywołanie serwisu
+│   │   ├── Support/          CatalogCache, ScreeningTimeline, ArticleMarkdown i inne klocki bez stanu
 │   │   ├── Payments/         port PaymentGateway i jedyny adapter znający Stripe'a
 │   │   ├── Tickets/          podpis i obraz kodu QR, PDF, zapis PDF-ów
 │   │   ├── Http/             kontrolery (tylko HTTP), FormRequesty, zasoby JSON
@@ -111,9 +119,13 @@ cinema/
 │   │   └── Exceptions/       wyjątki domenowe z kodem HTTP i polem code
 │   ├── database/             migracje, fabryki, seedery
 │   ├── routes/api.php        /api/v1
+│   ├── routes/web.php        (Etap 7) /admin — panel administracyjny
+│   ├── public/vendor/admin/  (Etap 7) przypięte Pico CSS, laravel-echo, pusher-js z sumami SHA256
 │   ├── routes/console.php    harmonogram
 │   └── tests/                PHPUnit na PostgreSQL (Unit, Feature)
 ├── tools/realtime-probe/     (Etap 6) sonda WebSocket: pusher-js w kontenerze Node
+├── tools/admin-assets/       (Etap 7) pobieranie zasobów panelu: Node po digeście, npm ci
+├── tools/readme-compliance/  (Etap 7) sprawdzenie, czy nazwy z README istnieją w kodzie
 ├── frontend/                 (Etap 8) Vue 3
 └── mobile/                   (Etap 9) Flutter
 ```
@@ -138,6 +150,8 @@ erDiagram
     cinemas |o--o{ users : "obsługa kina"
     bookings |o--o{ stripe_webhook_events : ""
     screenings ||--o| screening_seat_versions : "wersja stanu miejsc"
+    movies |o--o{ articles : "premiera"
+    users |o--o{ articles : "autor"
 ```
 
 | Tabela | Rola | Najważniejsze ograniczenia |
@@ -151,10 +165,11 @@ erDiagram
 | `screening_prices` | cena per seans i kategoria (grosze) | |
 | `seat_locks` | tymczasowa blokada miejsca | **`UNIQUE (screening_id, seat_id) WHERE released_at IS NULL`** |
 | `screening_seat_versions` | licznik wersji stanu miejsc per seans (Etap 6) | klucz główny = `screening_id`, CHECK `version > 0` |
-| `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień | CHECK statusu, `stripe_payment_intent_id` UNIQUE, indeks częściowy `bookings_confirmation_pending` |
+| `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień, anulowanie (powód, kto) i rozliczenie zwrotu (`refund_requested_at`, `refund_completed_at`) | CHECK statusu i `bookings_refund_completed_after_request`, `stripe_payment_intent_id` UNIQUE, indeksy częściowe `bookings_confirmation_pending`, `bookings_refund_pending`, `bookings_paid_at` |
 | `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`**, `code` UNIQUE |
 | `users` | klient, obsługa kina, administrator | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
 | `stripe_webhook_events` | dziennik przetworzonych zdarzeń Stripe'a (bez treści) | klucz główny = `event_id` |
+| `articles` | artykuł „Aktualności” / „Nadchodzące premiery” (Etap 7): typ, status, data publikacji, Markdown | `slug` UNIQUE, CHECK typu, statusu, daty publikacji i filmu premiery, indeks częściowy `articles_published` |
 
 ### Etap 1 — decyzje projektowe (1–13)
 
@@ -234,7 +249,7 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 - [x] Etap 4 — Stripe, webhook, obsługa wyścigu przy płatności
 - [x] Etap 5 — bilety, QR, PDF, kolejki, mail, scheduler
 - [x] Etap 6 — WebSocket (Laravel Reverb)
-- [ ] Etap 7 — panel administracyjny (Livewire)
+- [x] Etap 7 — panel administracyjny (Livewire), cache w Redisie, moduł informacyjny
 - [ ] Etap 8 — frontend Vue 3
 - [ ] Etap 9 — aplikacja Flutter
 - [ ] Etap 10 — CI/CD i dokumentacja
@@ -631,10 +646,11 @@ Błąd — jeden kształt dla wszystkiego:
     `Gate::authorize()`. ULID utrudnia zgadywanie, ale nie jest zabezpieczeniem.
 30. **`preventLazyLoading()` poza produkcją.** Problem N+1 objawia się jako błąd
     w teście, a nie jako 300 zapytań na produkcji.
-31. **Cache repertuaru świadomie przesunięty do Etapu 7**, razem z inwalidacją przy
+31. ~~**Cache repertuaru świadomie przesunięty do Etapu 7**, razem z inwalidacją przy
     zmianach w panelu admina. Dziś dałoby się napisać tylko cache na TTL — czyli
     dokładnie to, co zadanie odradza. `RepertoireService` jest jedynym miejscem
-    odczytu repertuaru, więc podmiana dotknie dwóch metod, a nie kontrolerów.
+    odczytu repertuaru, więc podmiana dotknie dwóch metod, a nie kontrolerów.~~
+    **Zrealizowane w Etapie 7** (decyzje 136–142): kontrolery i testy API bez zmian.
 
 ### Etap 3 — pułapki, na które trafiliśmy (F–I)
 
@@ -1676,6 +1692,7 @@ uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
   `seat_id`) a sweepem i `finish()` (kolejność `id`). PostgreSQL wykrywa go
   i przerywa jedną transakcję: webhook Stripe'a zostanie ponowiony, sweep
   wykona się w następnym przebiegu. Docelowo jedna kolejność blokad wszędzie.
+  **Rozwiązane w Etapie 7** (decyzje 166–167).
 - **`payment_intent.payment_failed` nie jest rozgłaszane** — rezerwacja zostaje
   `pending` (klient może poprawić dane karty w oknie płatności), a błąd karty
   zna od razu ze Stripe.js.
@@ -1685,3 +1702,530 @@ uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
   checkoutem (ten tworzyłby płatność w Stripe) — przejścia pokrywają testy.
 - **`.env.example` ma `CACHE_STORE=database`**, a środowisko używa Redisa;
   bez `APP_NAME` klucze w Redisie mają prefiks `laravel-…`. Porządek w Etapie 10.
+
+---
+
+## Etap 7 — panel administracyjny (Livewire), cache w Redisie, moduł informacyjny
+
+Panel pod <http://localhost:8080/admin> obsługuje całą część administracyjną zadania:
+strukturę kin i sal z edytorem układu, filmy z plakatami, repertuar z walidacją
+kolizji i kopiowaniem dni, sprzedaż (pulpit, lista rezerwacji, plan sali, feed na
+żywo, anulowanie ze zwrotem) oraz artykuły. Katalog w publicznym API jest
+cachowany w Redisie z inwalidacją przy każdej zmianie w panelu.
+
+Zasada przewodnia: **komponent Livewire tylko zbiera dane i woła serwis**.
+Każda reguła zależna od stanu bazy (kolizje, sprzedaż, nadchodzące seanse)
+zapada w serwisie pod blokadą wiersza, a komponent pokazuje komunikat
+z wyjątku domenowego.
+
+### Panel: dostęp i role
+
+| Rola | Co widzi i może |
+|---|---|
+| administrator | wszystko: kina, sale, układy, filmy, repertuar, rezerwacje z pełnym e-mailem klienta, anulowanie, artykuły, pulpit sieci |
+| obsługa kina | tylko **swoje kino** i tylko odczyt: pulpit, lista rezerwacji (e-mail zamaskowany), plan sali, siatka repertuaru |
+| klient, gość | brak dostępu (formularz logowania, 403 dla zalogowanego klienta) |
+
+- **Logowanie sesją** (guard `web`), a nie tokenem — panel to strony renderowane
+  przez serwer, ciasteczko HttpOnly. API zostaje przy tokenach Sanctum.
+  `PanelAuthService` daje jeden komunikat dla złego hasła, nieistniejącego konta
+  i konta klienta; limit liczy **wyłącznie porażki** (5/min konto+IP, 20/min IP),
+  udane logowanie zeruje licznik konta. Po zalogowaniu `session()->regenerate()`,
+  przy wylogowaniu `invalidate()` + `regenerateToken()`.
+- **Gate `panel.access`** (`AdminPanelServiceProvider`) to bramka grupy `/admin`.
+  O konkretnym rekordzie decydują Policies: `CinemaPolicy`, `HallPolicy`,
+  `MoviePolicy`, `ScreeningPolicy`, `BookingPolicy`, `ArticlePolicy`.
+- **Każda publiczna metoda komponentu to endpoint.** `authorize()` w `mount()`
+  i w każdej akcji, identyfikatory z `#[Locked]`, rekord ładowany od nowa w akcji.
+  Zakres obsługi kina liczony na serwerze przy każdym renderze — podmieniony
+  `?kino=` w adresie niczego nie odsłania.
+- **Sesje w Redisie w DB 2** (połączenie `session`): DB 0 to kolejka i muteksy
+  harmonogramu, DB 1 cache. `cache:clear` nie wylogowuje administratorów.
+
+Trasy panelu (`routes/web.php`): `/admin/login`, `/admin` (pulpit),
+`/admin/cinemas`, `/admin/cinemas/{cinema}/halls`, `/admin/halls/{hall}/layout`,
+`/admin/movies`, `/admin/cinemas/{cinema}/screenings` (siatka tygodnia),
+`/admin/cinemas/{cinema}/screenings/copy`, `/admin/bookings`,
+`/admin/bookings/{booking}`, `/admin/screenings/{screening}/seats`,
+`/admin/articles` oraz `POST /admin/broadcasting/auth`. Trasy panelu nie trafiają
+do `/docs/api` (Scramble dokumentuje wyłącznie `api/v1`).
+
+### Zasoby frontu panelu bez kroku budowania
+
+Pico CSS 2.1.1, `laravel-echo` 2.4.0 i `pusher-js` 8.6.0 leżą w
+`backend/public/vendor/admin/` razem z `SHA256SUMS` i licencjami. Pobiera je
+`tools/admin-assets/fetch.sh`: Node w kontenerze przypiętym **po digeście**,
+`npm ci` z `package-lock.json`, pliki należą do użytkownika WSL. Własny JS panelu
+to dwa pliki: `public/js/admin/hall-layout-editor.js` (Alpine) i
+`public/js/admin/realtime.js` (Echo).
+
+### Cache katalogu w Redisie: liczniki generacji
+
+`CatalogCache` trzyma repertuar dnia, kalendarz dni, listę kin, listę filmów
+i artykuły. **Klucz = nazwa + numery generacji**, od których zależą dane:
+
+```text
+catalog:repertoire:day:c3:2026-09-20:g2.5.11      (epoka . kino 3 . filmy)
+```
+
+- **Inwalidacja to `increment()` licznika** — jedno `INCRBY`, atomowe, bez `KEYS`,
+  `SCAN` i tagów. Stare klucze przestają być czytane i wygasają po TTL
+  (`CATALOG_CACHE_TTL`, 600 s) — TTL jest sprzątaniem, nie mechanizmem.
+- **Kolejność:** generacje czytamy **przed** zapytaniem do bazy, podbijamy je
+  **po COMMIT** (`DB::afterCommit`). Podbicie przed COMMIT pozwoliłoby czytelnikowi
+  zapisać stare dane pod nową generacją na cały TTL; po ROLLBACK nic się nie podbija.
+- **Generacje:** `epoch` (podbija `DatabaseSeeder` — po `migrate:fresh --seed`
+  id zaczynają się od nowa), `cinema:{id}` (sale, układy, seanse, cenniki, nazwa
+  i strefa kina), `cinemas`, `movies`, `articles`. Zmiana pośrednia też podbija:
+  `ScreeningLifecycleService` kończy seanse jednym `UPDATE` i podbija generacje kin.
+- **Tylko tablice i skalary.** `config/cache.php` ma `serializable_classes = false`,
+  więc model zapisany w Redisie wraca po cichu jako `__PHP_Incomplete_Class`.
+  `CatalogCache` rzuca wyjątek już przy próbie zapisu obiektu, a `RepertoireService`
+  odtwarza modele przez `newFromBuilder()` i `setRelation()` — kontrolery, zasoby
+  i testy API z Etapu 3 zostały bez zmian.
+- **Poza cache:** liczniki sprzedanych i zablokowanych miejsc oraz wszystko, co zależy
+  od „teraz” (seans rozpoczęty, artykuł zaplanowany) — liczone przy odczycie.
+  Premiera nie unieważnia cache co sekundę.
+- **Stampede:** po podbiciu liczy tylko ten, kto zdobędzie zamek; reszta czeka do 2 s
+  i czyta gotowy wynik. Brak zamka w czasie = wynik bez zapisu (*fail-open*).
+- **Listy bez kluczy per strona:** `MovieCatalogService` i `ArticleCatalogService`
+  trzymają jedną listę i wycinają stronę w PHP — parametry `?page`, `?per_page`
+  i `?type` nie mnożą kluczy. W cache nie ma adresów URL plakatów (zatrucie cache
+  nagłówkiem `Host` jednego żądania).
+
+### Struktura: kina, sale, edytor układu
+
+- **Bez twardego usuwania** kin, sal i filmów — `is_active`. Wyłączenie kina, sali
+  i filmu, zmiana strefy czasowej kina, typu projekcji sali i czasu trwania filmu
+  są zablokowane, dopóki istnieją nadchodzące seanse (409, `StructureChangeBlockedException`
+  z kodami `CINEMA_HAS_UPCOMING_SCREENINGS`, `CINEMA_TIMEZONE_LOCKED`,
+  `HALL_HAS_UPCOMING_SCREENINGS`, `HALL_PROJECTION_TYPE_IN_USE`,
+  `MOVIE_HAS_UPCOMING_SCREENINGS`, `MOVIE_DURATION_LOCKED`).
+- **Slug kina nadawany raz** — adres zapamiętany przez klientów nie psuje się po zmianie nazwy.
+- **Edytor układu** (`HallLayoutEditor`): generator prostokąta z przejściami
+  (`HallLayoutGenerator`), potem klikanie w siatkę w Alpine — bez żądania na każdy
+  fotel. Serwer dostaje cały układ przy zapisie i waliduje go w całości
+  (`HallLayoutService`): nakładające się kratki, miejsce podwójne zajmujące
+  kratki `x` i `x+1`, kategorie, pusty układ (`HALL_LAYOUT_INVALID`, z listą wszystkich problemów).
+- **Dwa tryby zapisu układu.** *Pełny* — sala bez historii sprzedaży i bez
+  nadchodzących seansów: `DELETE` + `INSERT`, rzędy i numery od nowa. *Ograniczony* —
+  tożsamość miejsc zamrożona (id, pozycja, rząd, numer, szerokość), wolno zmienić
+  kategorię, typ standard ↔ dla niepełnosprawnych i dostępność. Bilet z przeszłości
+  dalej wskazuje „B7”. Strażnicy sprzedaży: miejsce z blokadą albo płatnością w toku
+  (`HALL_LAYOUT_SEATS_HELD`), sprzedane (`HALL_LAYOUT_SEATS_SOLD`), kategoria bez
+  ceny w cenniku nadchodzącego seansu (`HALL_LAYOUT_PRICES_MISSING`). Po zapisie
+  `SeatsResync` dla nadchodzących seansów i generacja kina.
+
+### Filmy i plakaty
+
+- **Przekodowanie, a nie zapis 1:1** (`PosterImageProcessor`): tylko JPG i PNG,
+  `getimagesize()` przed dekodowaniem i limit 16 Mpx (bomba dekompresyjna nie
+  zaalokuje pamięci), minimum 300 × 450 px, wynik JPEG q85 w ramce 800 × 1200 na
+  białym tle. Nowy plik nie niesie EXIF-u ani danych doklejonych za obrazem.
+  GD w obrazie nie obsługuje WebP i AVIF, stąd tylko JPG i PNG.
+- **Plik i wiersz bez wspólnej transakcji** (`MovieAdminService`): obraz zapisany
+  przed transakcją pod nową nazwą `posters/{ulid}.jpg`, stary usuwany po COMMIT,
+  nowy przy ROLLBACK. Awaria pośrodku zostawia osierocony plik, nigdy wiersz
+  wskazujący plik, którego nie ma.
+- **Limity:** reguła `max:5120` (5 MB), a PHP przyjmuje do 8 MB
+  (`docker/php/conf.d/uploads.ini`, podpięty jako `zz-uploads.ini`) — plik 6 MB
+  dostaje polski komunikat walidacji zamiast cichego odrzucenia przez PHP.
+- **Dysk `public`** z względnym dowiązaniem `public/storage`; dysk `local` ma
+  `'serve' => false`, bo trasa `storage/{path}` zajmowała ten sam prefiks.
+  `APP_URL` wskazuje port nginx (8080) — adresy plakatów w mailach i kolejce.
+- **`GET /api/v1/movies`** — aktywne filmy, najnowsze premiery pierwsze, bez opisu.
+
+### Repertuar: seanse, kolizje, siatka, kopiowanie
+
+- **`ScreeningTimeline` to jedyne miejsce liczenia czasu seansu** (panel, seeder,
+  fabryka): `starts_at` → reklamy → `ends_at` → sprzątanie → `slot_ends_at`.
+  Bufory są globalne (`SCREENING_ADS_MINUTES`, `SCREENING_CLEANUP_BUFFER_MINUTES`)
+  i działają na nowe seanse — istniejące mają zapisane końce.
+- **Kolizje w trzech warstwach, jedna definicja** (`ScreeningSlot::overlaps`,
+  przedział półotwarty): blokada wiersza sali szereguje zmiany repertuaru i układu;
+  pod blokadą zapytanie zwraca **listę kolidujących seansów** (409 `SCREENING_CONFLICT`);
+  constraint `screenings_no_overlap` łapie resztę, a SQLSTATE `23P01` tłumaczymy
+  na ten sam wyjątek.
+- **Godzina w strefie kina.** `ScreeningTimeline::localStart()` odrzuca godziny,
+  których nie ma przy zmianie czasu na letni, i podwójne przy zmianie na zimowy
+  (`SCREENING_INVALID`).
+- **Seans ze sprzedażą jest zamrożony** (`SCREENING_HAS_SALES`, `SCREENING_HAS_BOOKINGS`):
+  `FOR UPDATE` na wierszu seansu czeka na `INSERT` do `seat_locks`, `bookings`
+  i `tickets`, bo klucz obcy bierze `FOR KEY SHARE` na tym samym wierszu.
+  Kolejność blokad: sale rosnąco → kino `FOR SHARE` → film `FOR SHARE` → seans.
+- **Ceny w złotych jako tekst** („25,50”) zamieniane na grosze bez liczby
+  zmiennoprzecinkowej.
+- **Siatka tygodnia** (`ScreeningWeek`): sale × 7 dni w strefie kina, liczba
+  sprzedanych biletów z linkiem do planu sali; obsługa kina widzi siatkę swojego
+  kina bez edycji (`CinemaPolicy::viewRepertoire`).
+- **Kopiowanie dnia** (`RepertoireCopyService`): każdy seans przez
+  `ScreeningAdminService::create()` w osobnym SAVEPOINT — te same reguły co ręcznie.
+  Wszystko albo nic (`REPERTOIRE_COPY_BLOCKED` z pełnym raportem), podgląd to ten
+  sam przebieg zakończony ROLLBACK, seans identyczny z istniejącym oznaczony „już jest”
+  (podwójne kliknięcie niczego nie dubluje), blokada doradcza na kino i dzień docelowy.
+  Godzina lokalna zostaje ta sama także przez zmianę czasu.
+
+### Sprzedaż: lista rezerwacji i plan sali
+
+- **Lista** (`BookingIndex`): filtry w adresie (`kino`, `data`, `film`, `status`, `nr`),
+  paginacja, numer rezerwacji po prefiksie ULID (min. 4 znaki). Dzień seansu w strefie
+  **tego** kina: `(screenings.starts_at AT TIME ZONE cinemas.timezone)::date`.
+  Relacje ładowane z góry — `preventLazyLoading` wywraca test przy zapomnianym `with()`.
+- **Dane osobowe:** administrator widzi pełny e-mail klienta, obsługa kina
+  zamaskowany (`PersonalData::maskEmail`, `a***@example.com`). Identyfikator płatności
+  Stripe tylko w końcówce.
+- **Plan sali seansu** (`ScreeningSeatPlan`): ten sam `SeatMapService` co publiczne API,
+  bez sesji klienta; sprzedane miejsce linkuje do rezerwacji, cudza blokada zostaje
+  anonimowa. Seans w sprzedaży odświeża się co 10 s.
+
+### Jedna kolejność blokad
+
+Deadlock powstaje, gdy dwie transakcje blokują te same wiersze w różnej kolejności.
+Reguły po Etapie 7:
+
+1. **`seat_locks`:** każde `SELECT … FOR UPDATE` idzie przez scope
+   `SeatLock::scopeInLockOrder()` (w zapytaniach `->inLockOrder()`) = `ORDER BY screening_id, seat_id` (checkout, `fulfil()`,
+   `finish()`, zwalnianie, sprzątanie). Wśród niezwolnionych blokad para jest unikalna,
+   więc kolejność jest całkowita także w porcji sprzątania wielu seansów.
+2. **Między tabelami:** rezerwacja → `seat_locks` albo bilety → wersja stanu miejsc.
+   Dlatego checkout przy podwójnym kliknięciu tylko **czyta** wiersz rezerwacji
+   (trzyma już `seat_locks`), a anulowanie opłaconej rezerwacji blokuje bilety
+   **przed** sprawdzeniem „żaden nie wykorzystany” — skan przy wejściu czeka na nie.
+
+Obie reguły sprawdzają testy na logu zapytań (`SeatLockOrderingTest`,
+`AdminBookingCancellationTest`).
+
+### Anulowanie rezerwacji przez administratora ze zwrotem
+
+```text
+BookingService::cancelByAdmin()  ── transakcja: status cancelled, powód, kto, bilety cancelled,
+        │                           miejsca wolne (wersja stanu miejsc), refund_requested_at
+        ▼  po COMMIT
+PaymentService::settleRefund()   ── retrieveIntent: da się anulować → cancelIntent (klucz :cancel)
+        │                                          succeeded        → refundIntent (klucz :refund)
+        │                                          processing       → zostaw
+        ▼
+BookingService::completeRefund() ── transakcja: refund_completed_at; status refunded tylko gdy
+                                    pieniądze wróciły, void zostawia cancelled
+```
+
+- **Miejsca wracają do sprzedaży od razu**, niezależnie od operatora płatności.
+  Porażka rozmowy ze Stripe'em nie cofa anulowania: rezerwacja zostaje na liście
+  zaległych (`refund_requested_at` bez `refund_completed_at`, indeks częściowy
+  `bookings_refund_pending`), a komenda `cinema:bookings:retry-refunds` ponawia ją co
+  5 minut (rozliczenia starsze niż 120 s — świeże rozlicza panel).
+- **Decyzja z bieżącego stanu płatności**, a nie z naszej bazy: status `paid` nie mówi,
+  czy capture już się odbył (`fulfil()` ustawia go przed capture). Te same klucze
+  idempotencji co w webhooku i wygaszaniu = żadnego podwójnego zwrotu; po wygaśnięciu
+  klucza (24 h) kod `charge_already_refunded` też oznacza sukces.
+- **Webhook po anulowaniu:** rezerwacja z `refund_requested_at` dostaje wynik
+  `admin_cancelled` — spóźnione `amount_capturable_updated` nie pobierze pieniędzy,
+  a `succeeded` nie zleci drugiego zwrotu. `fulfil()` uznaje istnienie biletów za
+  „już opłacone” tylko przy statusie `paid`.
+- **Kiedy nie wolno:** status inny niż `pending`/`paid` (`BOOKING_NOT_CANCELLABLE`),
+  seans opłaconej rezerwacji już się zaczął (`BOOKING_SCREENING_STARTED`), bilet
+  wykorzystany (`BOOKING_TICKETS_USED`), powód krótszy niż 10 albo dłuższy niż 255
+  znaków (`CANCELLATION_REASON_INVALID`, 422). Anuluje wyłącznie administrator
+  (`BookingPolicy::cancel`).
+- **Powód to notatka wewnętrzna:** widzą go tylko administratorzy w panelu. Nie ma
+  go w mailu do klienta (`BookingCancelledByCinema`, kolejka, `shouldSend()` w chwili
+  wysyłki), w logach, w feedzie ani w API klienta — `GET /api/v1/bookings/{booking}`
+  zwraca `cancellation.cancelled_at` i `cancellation.refund` (`none`, `pending`, `refunded`).
+
+### Pulpit i feed sprzedaży na żywo
+
+| Liczba | Definicja (`SalesDashboardService`) |
+|---|---|
+| sprzedaż brutto | rezerwacje opłacone dziś (`paid_at`) ze statusem `paid` albo `refunded` — pieniądze wpłynęły |
+| zwroty | rezerwacje `refunded` ze zwrotem zakończonym dziś (`refund_completed_at`) |
+| netto | brutto minus zwroty (zwrot może dotyczyć wczorajszej sprzedaży) |
+| bilety | nieanulowane bilety rezerwacji opłaconych dziś |
+| obłożenie | nieanulowane bilety / aktywne miejsca sali, seanse zaczynające się dziś |
+| top 5 filmów | nieanulowane bilety z rezerwacji opłaconych w ostatnich 7 dobach |
+
+- **„Dziś” to doba w strefie każdego kina.** Kina grupujemy po strefie, dla każdej
+  liczymy przedział półotwarty [północ, następna północ) w UTC i łączymy warunkiem
+  `OR` — porównanie z `paid_at` trafia w indeks `bookings_paid_at`. Następną północ
+  liczymy w strefie kina, więc doba zmiany czasu ma 23 albo 25 godzin (test na 25.10.2026).
+  Bez cache: kilka zapytań po indeksach, a pulpit ma pokazywać stan z tej chwili.
+- **Feed przez WebSocket:** `Dashboard` nasłuchuje `echo-private:sales,.sales.activity`
+  (administrator) albo kanału `cinemas.{id}.sales` (obsługa). Podpis kanału wydaje
+  `POST /admin/broadcasting/auth` — sesja i CSRF zamiast tokenu, ale **ta sama**
+  `ChannelAuthorizationService` co w API, więc reguła „kto słucha feedu kina” jest
+  zapisana raz. Limit `panel-broadcasting-auth`: 30/min na użytkownika.
+- **Zdarzenie z przeglądarki to tylko sygnał.** Argument metody nasłuchującej wysyła
+  klient, więc bierzemy z niego wyłącznie numer rezerwacji i status, a treść wpisu
+  czytamy z bazy w zakresie zalogowanego użytkownika. Zdarzenie z cudzego kina jest
+  ignorowane.
+- **`realtime.js`** ładuje się tylko na pulpicie, w `<head>` przed skryptem Livewire
+  (Livewire zakłada nasłuchy przy starcie komponentu). Adres WebSocketu = adres strony,
+  bo nginx przekazuje `/app/` do Reverba. Status połączenia widać w nagłówku pulpitu.
+- **Rezerwa:** `wire:poll.60s`, gdy WebSocket nie działa. Po odzyskaniu połączenia
+  `realtime.js` wysyła `realtime-reconnected`, a pulpit odtwarza feed z bazy — zdarzenia
+  z czasu przerwy przepadły.
+
+### Moduł informacyjny: artykuły
+
+- **Tabela `articles`:** `type` (`news` „Aktualności”, `premiere` „Nadchodzące premiery”),
+  `status` (`draft`, `published`), `published_at`, `excerpt`, `body` (Markdown),
+  `movie_id`, `author_id`, niezmienny `slug`. CHECK-i w bazie: opublikowany ma datę
+  (`articles_published_has_date`), premiera wskazuje film (`articles_premiere_has_movie`).
+- **„Zaplanowany” to nie osobny status**, tylko `published` z datą w przyszłości.
+- **Publiczne API:** `GET /api/v1/articles` (filtr typu, paginacja)
+  i `GET /api/v1/articles/{slug}` z `body_html`. Filtr `type`: `news` albo `premiere`. Szkic i artykuł zaplanowany dają 404
+  jak nieistniejący.
+- **Cache (`ArticleCatalogService`):** jeden klucz z **wszystkimi** opublikowanymi
+  artykułami, także zaplanowanymi, bez treści; filtr „data minęła”, typ i stronę liczymy
+  przy odczycie. Zaplanowany artykuł pojawia się sam o swojej godzinie — bez zadania
+  w harmonogramie i bez TTL dopasowanego do najbliższej publikacji. Treść ma osobny klucz
+  per artykuł z gotowym HTML-em. O istnieniu artykułu decyduje lista z cache: nieznany
+  slug dostaje 404 bez zapytania do bazy i bez zakładania nowego klucza.
+- **Bezpieczny HTML (`ArticleMarkdown`):** `html_input = strip` (surowy HTML znika),
+  `allow_unsafe_links = false` (`javascript:`, `data:` tracą `href`). Vue i Flutter wstawią
+  `body_html` jako HTML, więc to granica bezpieczeństwa klientów — test jednostkowy na
+  10 przypadków złośliwego wejścia. W bazie trzymamy Markdown, nie HTML: zmiana reguł
+  sanityzacji nie wymaga przepisania wierszy.
+- **Panel:** lista z kolumną „Widoczność” (szkic / zaplanowany / widoczny), formularz
+  z podglądem liczonym tym samym `ArticleMarkdown`, data publikacji w strefie
+  Europe/Warsaw (`ArticleAdminService::TIMEZONE`) z odrzuceniem godzin nieistniejących
+  przy zmianie czasu, twarde usuwanie (artykułu nie wskazuje żadna sprzedaż).
+  `ArticleSeeder` dodaje 5 przykładowych artykułów.
+
+### Nowe endpointy API i kody błędów
+
+| Metoda | Ścieżka | Opis |
+|---|---|---|
+| GET | `/api/v1/movies` | aktywne filmy sieci, paginacja (`per_page` do 50), cache |
+| GET | `/api/v1/articles` | opublikowane artykuły, filtr `type` (`news` / `premiere`), paginacja, cache |
+| GET | `/api/v1/articles/{slug}` | artykuł z `body_html`, cache |
+
+Zmiana w istniejącym: `GET /api/v1/bookings/{booking}` — w `cancellation` zamiast
+powodu jest stan zwrotu `refund`.
+
+| Kod | HTTP | Kiedy |
+|---|---|---|
+| `SCREENING_INVALID` | 422 | godzina nieistniejąca albo podwójna przy zmianie czasu, seans w przeszłości, sala wyłączona, zły cennik |
+| `SCREENING_CONFLICT` | 409 | seans nachodzi na inny w tej sali (lista kolizji w `context`) |
+| `SCREENING_HAS_SALES` / `SCREENING_HAS_BOOKINGS` / `SCREENING_NOT_EDITABLE` / `SCREENING_STALE` | 409 | zmiana albo odwołanie seansu ze sprzedażą, zakończonego lub zmienionego w międzyczasie |
+| `REPERTOIRE_COPY_BLOCKED` | 409 | kopiowanie dnia z choćby jednym problemem (raport w `context`) |
+| `HALL_LAYOUT_INVALID` | 422 | układ z nakładającymi się miejscami, nieznaną kategorią, pusty |
+| `HALL_LAYOUT_RESTRICTED` / `HALL_LAYOUT_SEATS_HELD` / `HALL_LAYOUT_SEATS_SOLD` / `HALL_LAYOUT_PRICES_MISSING` | 409 | zmiana układu sali z historią albo nadchodzącą sprzedażą |
+| `CINEMA_HAS_UPCOMING_SCREENINGS` / `CINEMA_TIMEZONE_LOCKED` / `HALL_HAS_UPCOMING_SCREENINGS` / `HALL_PROJECTION_TYPE_IN_USE` / `HALL_NAME_TAKEN` | 409 | zmiana struktury przy nadchodzących seansach, nazwa sali zajęta w kinie |
+| `MOVIE_HAS_UPCOMING_SCREENINGS` / `MOVIE_DURATION_LOCKED` | 409 | wyłączenie filmu albo zmiana czasu trwania przy nadchodzących seansach |
+| `POSTER_INVALID` | 422 | plik nie jest JPG/PNG, za mały, ponad 16 Mpx, nieczytelny |
+| `BOOKING_NOT_CANCELLABLE` / `BOOKING_SCREENING_STARTED` / `BOOKING_TICKETS_USED` | 409 | anulowanie rezerwacji niedozwolone |
+| `CANCELLATION_REASON_INVALID` | 422 | powód spoza 10–255 znaków |
+| `ARTICLE_INVALID` | 422 | premiera bez filmu, nieznany film, zła godzina publikacji |
+| `PANEL_LOGIN_THROTTLED` | 429 | za dużo nieudanych logowań do panelu |
+
+### Infrastruktura i konfiguracja
+
+- `docker/php/conf.d/uploads.ini` podpięty w kotwicy `x-php-app` jako
+  `/usr/local/etc/php/conf.d/zz-uploads.ini:ro` (`upload_max_filesize = 8M`,
+  `post_max_size = 10M`). Po zmianie pliku: `docker compose up -d --force-recreate php worker scheduler reverb`,
+  potem `docker compose restart nginx`.
+- `backend/phpunit.xml`: `memory_limit` 512M dla całego zestawu testów.
+- Harmonogram: nowa komenda `cinema:bookings:retry-refunds` co 5 minut
+  (`withoutOverlapping`, `onOneServer`, wyjście do logu schedulera).
+
+| Zmienna | Domyślnie | Znaczenie |
+|---|---|---|
+| `APP_URL` | `http://localhost:8080` | port nginx — adresy plakatów poza żądaniem HTTP |
+| `SESSION_CONNECTION` / `REDIS_SESSION_DB` | `session` / `2` | sesje panelu w osobnej bazie Redisa |
+| `CATALOG_CACHE_TTL` | `600` | sekundy; zabezpieczenie i sprzątanie cache katalogu |
+| `SCREENING_ADS_MINUTES` / `SCREENING_CLEANUP_BUFFER_MINUTES` | `15` / `20` | bufor reklam i sprzątania w slocie seansu |
+
+### Etap 7 — decyzje projektowe (128–186)
+
+128. **Livewire 4 z komponentami klasowymi** i layoutem `layouts::admin`; panel bez SPA i bez kroku budowania.
+129. **Sesja dla panelu, tokeny Sanctum dla API** — dwa wejścia, jeden model `User`.
+130. **Panel dla administratora i obsługi kina**; Gate `panel.access` jako bramka, decyzje w Policies.
+131. **Limit liczy tylko porażki** (5/min konto+IP, 20/min IP), jeden komunikat odmowy, hash także dla nieistniejącego konta.
+132. **`regenerate()` po logowaniu, `invalidate()` + `regenerateToken()` przy wylogowaniu** — session fixation w teście.
+133. **Sesje w Redisie DB 2** — osobno od kolejki (DB 0) i cache (DB 1).
+134. **Pico CSS i przypięte pliki JS w repozytorium**, pobierane skryptem z Node po digeście i `npm ci`, z sumami SHA256.
+135. **`authorize()` w każdej akcji komponentu, `#[Locked]` na identyfikatorach**, rekord ładowany od nowa w akcji.
+136. **Cache katalogu na licznikach generacji** zamiast tagów i `KEYS`.
+137. **Generacje czytane przed zapytaniem, podbijane po COMMIT.**
+138. **W cache tylko tablice i skalary**; modele odtwarzane `newFromBuilder()` / `setRelation()`.
+139. **Zamek przeciw stampede, fail-open bez zapisu.**
+140. **Liczniki sprzedaży i wszystko zależne od „teraz” poza cache**, liczone przy odczycie.
+141. **Epoka podbijana przez `DatabaseSeeder`**; zmiana pośrednia ze schedulera też podbija generacje.
+142. **TTL 600 s jako zabezpieczenie**; nigdy `Cache::flush()` w kodzie aplikacji (bezpiecznik Reverba i limitery w tym samym store).
+143. **Bez twardego usuwania kin, sal i filmów**; wyłączenie i zmiany wpływające na sprzedaż zablokowane przy nadchodzących seansach (409).
+144. **Slug kina nadawany raz.**
+145. **Nowa sala ma siatkę 0 × 0**; miejsca i wymiary nadaje edytor układu.
+146. **Szkic układu w Alpine, walidacja całości na serwerze** przy zapisie.
+147. **Dwa tryby zapisu układu**: pełny dla sali bez historii i nadchodzących seansów, ograniczony z zamrożoną tożsamością miejsc.
+148. **Strażnicy sprzedaży przy zmianie układu** (blokady, sprzedane miejsca, cennik); po zapisie `SeatsResync` i generacja kina.
+149. **Miejsce podwójne zajmuje kratki `x` i `x+1`** — konwencja seedera sprawdzana przez walidację układu.
+150. **Plakat przekodowany do JPEG** (JPG/PNG, ≤ 16 Mpx, ≥ 300 × 450, ramka 800 × 1200); wymiary z nagłówka przed dekodowaniem.
+151. **Plik plakatu przed transakcją, nowa nazwa przy każdej zmianie**, stary usuwany po COMMIT, nowy przy ROLLBACK.
+152. **Limity uploadu PHP w pliku ini podpiętym jako wolumen** (8M/10M) przy regule aplikacji 5 MB.
+153. **Dysk `local` z `'serve' => false`, względne `public/storage`, `APP_URL` na porcie nginx.**
+154. **`GET /api/v1/movies` z jedną listą w cache** i stroną wycinaną w PHP; bez adresów URL w cache.
+155. **`ScreeningTimeline` jako jedyne miejsce liczenia slotu**; bufor globalny, zmiana działa na nowe seanse.
+156. **Kolizje w trzech warstwach** (blokada sali, zapytanie z listą, `EXCLUDE` + `23P01`) z jedną definicją nakładania.
+157. **Godzina seansu w strefie kina**; godziny nieistniejące i podwójne przy zmianie czasu odrzucane.
+158. **Seans ze sprzedażą zamrożony, `FOR UPDATE` na seansie** — `INSERT` z kluczem obcym czeka na tę blokadę.
+159. **Kolejność blokad planowania**: sale rosnąco → kino `FOR SHARE` → film `FOR SHARE` → seans.
+160. **Ceny w złotych jako tekst → grosze bez float.**
+161. **Siatka tygodnia w strefie kina**; obsługa widzi siatkę swojego kina bez edycji.
+162. **Kopiowanie dnia przez `ScreeningAdminService::create()` w SAVEPOINT-ach**: wszystko albo nic, podgląd z ROLLBACK, „już jest” zamiast duplikatu, blokada doradcza na dzień docelowy.
+163. **Zakres obsługi kina liczony na serwerze przy każdym renderze**; e-mail klienta zamaskowany dla obsługi.
+164. **Dzień seansu w SQL w strefie kina z wiersza** (`AT TIME ZONE cinemas.timezone`) dla filtra listy rezerwacji.
+165. **Plan sali w panelu z `SeatMapService` bez sesji**; numer rezerwacji tylko przy sprzedanym miejscu, odświeżanie co 10 s.
+166. **Jedna kolejność blokowania `seat_locks`**: `screening_id, seat_id` przez scope; `SELECT … FOR UPDATE`, potem `UPDATE` po id.
+167. **Kolejność między tabelami: rezerwacja → `seat_locks`/bilety → wersja miejsc**; checkout nie blokuje wiersza rezerwacji.
+168. **Anulowanie w trzech krokach: baza → operator → baza**; porażka operatora nie cofa anulowania.
+169. **Rozliczenie z bieżącego stanu płatności u operatora** (void, zwrot albo ponowienie) z tymi samymi kluczami idempotencji.
+170. **Dwa znaczniki rozliczenia + indeks częściowy + CHECK** zamiast statusu; komenda ponawiająca co 5 minut.
+171. **Webhook na rezerwacji anulowanej przez administratora → `admin_cancelled`**; `fulfil()` idempotentne tylko dla `paid`.
+172. **Bilety blokowane przed sprawdzeniem „wykorzystany”** — wyścig ze skanerem przy wejściu.
+173. **Status `refunded` tylko po zwrocie pieniędzy**; zwolniona autoryzacja zostawia `cancelled`.
+174. **Powód anulowania to notatka wewnętrzna** (10–255 znaków): poza mailem, logami, feedem i API klienta; klient dostaje stan zwrotu.
+175. **Anulowanie wyłącznie przez administratora**, opłaconej tylko przed seansem i bez wykorzystanego biletu.
+176. **`POST /admin/broadcasting/auth` z sesją i CSRF, ta sama `ChannelAuthorizationService`**; limiter 30/min na użytkownika.
+177. **`ForceJsonResponse` z priorytetem przed uwierzytelnieniem** — błędy autoryzacji kanału w JSON-ie jak w API.
+178. **Echo z przypiętego IIFE, adres WebSocketu = adres strony**, skrypty tylko na pulpicie przed Livewire.
+179. **Zdarzenie z przeglądarki jako sygnał, wpis feedu z bazy** w zakresie użytkownika.
+180. **„Dziś” w strefie każdego kina** przez przedziały półotwarte w UTC na strefę; pulpit bez cache.
+181. **`wire:poll.60s` jako rezerwa i odtworzenie feedu po reconnect.**
+182. **Indeksy pulpitu**: częściowe `bookings_paid_at`, `bookings_refund_completed_at` i `bookings_updated_at`.
+183. **Markdown w bazie, HTML przy odczycie przez `ArticleMarkdown`** (bez surowego HTML-a i niebezpiecznych linków).
+184. **„Zaplanowany” = opublikowany z przyszłą datą**; lista w cache filtrowana czasem przy odczycie.
+185. **Treść artykułu w osobnym kluczu; 404 rozstrzyga lista z cache**, bez nowych kluczy dla losowych adresów.
+186. **Niezmienny slug artykułu, data publikacji w strefie Europe/Warsaw, twarde usuwanie**, CHECK-i publikacji i premiery w bazie.
+
+### Etap 7 — pułapki, na które trafiliśmy (AW–BS)
+
+- **AW. Pusty raport przechodzi strażnika „zero braków”.** Skrypt zgodności przeczytał
+  README bez sekcji etapu i wypisał „OK: 0, BRAK: 0”. Strażnik wymaga niepustego wyniku.
+- **AX. Ciasteczko sesji nazywa się „laravel-session”** (slug `APP_NAME` z myślnikiem),
+  więc skan sekretów szukający „laravel_session” go nie widział. Wzorzec skanu: „laravel[-_]session”.
+- **AY. Sesje w Redisie bez `SESSION_CONNECTION` lądują w DB 0** razem z kolejką
+  i muteksami harmonogramu. Osobne połączenie `session` na DB 2.
+- **AZ. `redirectGuestsTo()` dla panelu zamieniłoby 401 JSON API w przekierowanie**
+  na formularz logowania. Callback zwraca `null` dla `api/*`; test regresji w `PanelAccessTest`.
+- **BA. `Livewire::test` działa bez middleware trasy.** `can:` na trasie nie chroni
+  komponentu w teście ani w żądaniach aktualizacji — broni tylko `authorize()` w komponencie.
+- **BB. `serializable_classes = false` (Laravel 13):** model zapisany w Redisie wraca po
+  cichu jako `__PHP_Incomplete_Class`, bez wyjątku. W testach store `array` bez serializacji
+  to ukrywa — testy cache włączają `serialize`.
+- **BC. 419 bez tokenu CSRF nie da się sprawdzić w PHPUnit** — weryfikacja CSRF jest pomijana,
+  gdy działają testy, a `Livewire::test` wyłącza middleware. 419 sprawdzają testy dymne przez nginx.
+- **BD. Zmiana pośrednia omija inwalidację.** Scheduler kończy seanse jednym `UPDATE`,
+  bez serwisu panelu — bez jawnego podbicia generacji repertuar w cache pokazywałby seans do końca TTL.
+- **BE. Identyfikatory commitów lustra różnią się od repozytorium**, więc strażnik „HEAD to X”
+  w skrypcie paczki zatrzymał poprawny blok. Stan sprawdzamy sumami SHA256 plików przed łatką.
+- **BF. `validate()` zatrzymuje się na wcześniejszym polu** — test przejść w generatorze układu
+  padał na brakującej kategorii cenowej, a nie na sprawdzanej regule.
+- **BG. Po 403 w `Livewire::test` komponent nie ma migawki** — każda kolejna akcja wymaga nowej instancji.
+- **BH. Dwa przyciski `radio` z tą samą wartością** (`standard`) w edytorze układu — wybór
+  typu miejsca był niejednoznaczny; testy komponentu tego nie widzą, wykrył to dopiero Playwright.
+- **BI. Pojedynczy plik podpięty jako wolumen jest związany z i-węzłem.** Edytor, `sed -i`
+  i `git checkout` zapisują nowy plik, a kontener widzi stary — potrzebne `--force-recreate`.
+- **BJ. Po odtworzeniu kontenera `php` trzeba zrestartować nginx** — `fastcgi_pass php:9000`
+  rozwiązuje adres tylko przy starcie nginx.
+- **BK. `UploadedFile::fake()` żyje tyle, co obiekt** — plik tymczasowy znika razem z nim;
+  test musi trzymać referencję do końca.
+- **BL. Statyczny licznik slotów w `ScreeningFactory` przechodzi między testami** — seanse
+  przesuwały się o dni, a podróż w czasie dalej niż TTL gasiła cache. Reset w `TestCase::setUp()`.
+- **BM. Endpoint uploadu Livewire w teście** wymaga podpisu względnego, `Accept: application/json`
+  i `Storage::fake('tmp-for-tests')` — inaczej 401, 302 albo 500.
+- **BN. Laravel formatuje daty dla PostgreSQL jako `Y-m-d H:i:s` bez strefy.** Carbon w strefie
+  kina trafiał do kolumny `timestamptz` jako czas UTC — przesunięcie o 2 godziny w seederze i granicach
+  dnia repertuaru. Do zapytań i zapisów tylko Carbon w UTC.
+- **BO. `update()` / `fill()` po cichu pomija pola spoza `$fillable`** — test zmieniał kolumnę,
+  której zmiana nigdy nie doszła do bazy.
+- **BP. `INSERT` z kluczem obcym bierze `FOR KEY SHARE` na wierszu rodzica.** Konfliktuje
+  z `FOR UPDATE`, ale nie z `FOR NO KEY UPDATE`, które bierze zwykły `UPDATE` — dlatego
+  zamrożenie seansu wymaga jawnego `lockForUpdate()`.
+- **BQ. Pełny zestaw testów w jednym procesie PHP przekroczył 128 MB** — obrazy GD liczą się
+  do `memory_limit` CLI. `memory_limit` 512M w `phpunit.xml`.
+- **BR. Kolejność middleware na trasie nie jest gwarantowana.** Laravel sortuje je według listy
+  priorytetów i przesuwa `auth` przed middleware spoza listy — `ForceJsonResponse` trzeba było
+  dopisać do priorytetów (`prependToPriorityList`).
+- **BS. OPcache sprawdza pliki co „opcache.revalidate_freq” (2 s)** — żądanie tuż po łatce trafiło
+  w stary kod (404 nowej trasy, 500 widoku). Testy dymne czekają 3 s na starcie.
+
+### Etap 7 — testy
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `PanelAccessTest` | 20 | macierz dostępu gość / klient / obsługa / administrator, session fixation, jeden komunikat odmowy, limity per konto i per IP, `authorize()` w komponencie, regresja 401 w API |
+| `CatalogCacheTest` | 9 | generacje (także niezwiązane i epoka), pusta tablica jako trafienie, podbicie po COMMIT i brak po ROLLBACK, dowód pułapki BB, odrzucenie obiektów, zamek i fail-open |
+| `RepertoireCacheTest` | 8 | identyczny JSON z cache, odtworzone modele z rzutowaniami, generacje filmów, kina i listy kin, liczniki miejsc na żywo, seans zakończony przez scheduler znika, kalendarz filtrowany czasem |
+| `CinemaManagementTest` | 11 | trasy i komponenty tylko dla administratora, `#[Locked]`, wyszukiwanie z `%` dosłownie, walidacja, unikalny i stały slug, blokady strefy i wyłączenia, wyłączone kino znika z API od razu |
+| `HallManagementTest` | 8 | typy projekcji (kolejność, wymagane, w użyciu), nazwa unikalna w kinie, blokada wyłączenia, sala innego kina, komponenty bez middleware, nowa nazwa w repertuarze od razu |
+| `HallLayoutGeneratorTest` | 4 | przejścia jak w seederze, sala jednorzędowa, przejście poza rzędem, rząd szerszy niż siatka |
+| `HallLayoutServiceTest` | 9 | tryb pełny z numeracją bez luk, lista wszystkich błędów bez zmian, przejście w tryb ograniczony, zmiany w miejscu i `SeatsResync`, strażnicy blokady, sprzedaży i cennika, odwołany seans nie ogranicza |
+| `HallLayoutEditorTest` | 8 | dostęp, generator bez zapisu i w trybie ograniczonym, zapis przez serwis, lista błędów, uprawnienia przy każdym wywołaniu, `#[Locked]` |
+| `PosterImageProcessorTest` | 8 | skalowanie bez powiększania, przezroczysty PNG na białym tle, bez metadanych i doklejonych bajtów, bomba dekompresyjna odrzucona z nagłówka, za mały obraz, fałszywe i ucięte pliki |
+| `MovieManagementTest` | 16 | plakat jako przeskalowany JPEG, walidacja zaraz po wgraniu i w endpoincie uploadu Livewire, bomba dekompresyjna, slug, `#[Locked]`, stary plik po COMMIT, nowy usuwany po błędzie, usuwanie tylko z `posters/`, blokady |
+| `MovieListApiTest` | 4 | tylko aktywne, paginacja, cache i inwalidacja, adres plakatu z hosta żądania |
+| `ScreeningTimelineTest` | 20 | **test jednostkowy kolizji (wymóg 5.2)**: przedział półotwarty i symetryczny, bufory, zapis w UTC, godziny nieistniejące i podwójne przy zmianie czasu (przypadki z data providerów) |
+| `ScreeningAdminServiceTest` | 10 | godzina lokalna i cennik, kolizja z listą w czasie kina, styk / inna sala / odwołany bez kolizji, ta sama reguła w constraincie, wiersz spoza serwisu → 409 zamiast 500, zmiana i blokady, odwołanie |
+| `RepertoireDayBoundaryTest` | 1 | granice dnia repertuaru w strefie kina (regresja pułapki BN) |
+| `ScreeningPanelTest` | 8 | dostęp administratora i obsługi, siatka w dniach lokalnych, ceny w zł, komunikaty przy polach, zmiana sali, blokada edycji przy sprzedaży, odwołanie, `#[Locked]` |
+| `RepertoireCopyServiceTest` | 6 | godziny lokalne i ceny przez zmianę czasu, jeden problem blokuje całość, drugie kopiowanie niczego nie tworzy, podgląd bez zmian, reguły ręcznego planowania, walidacja dni |
+| `RepertoireCopyPanelTest` | 5 | dostęp i link z siatki, podgląd i kopiowanie, raport problemów blokuje kopiowanie, zmiana po podglądzie wykryta przy kopiowaniu, uprawnienia |
+| `BookingPanelTest` | 7 | zakres obsługi z podrobionym filtrem i maskowanie e-maili, filtry z dniem lokalnym, liczba zapytań niezależna od liczby rezerwacji, szczegóły z końcówką płatności, plan sali, uprawnienia |
+| `SeatLockOrderingTest` | 3 | jedna kolejność blokad `seat_locks` na logu zapytań we wszystkich ścieżkach |
+| `AdminBookingCancellationTest` | 12 | zwrot, zwolnienie autoryzacji, pending bez płatności, awaria operatora i ponowienie, capture wygrywający z void, `charge_already_refunded`, webhooki po anulowaniu, blokady i powód, kolejność blokad |
+| `BookingCancellationPanelTest` | 3 | formularz tylko dla administratora, walidacja powodu, podpowiedź blokady, API klienta bez powodu |
+| `PanelBroadcastingAuthTest` | 4 | podpisy feedu dla administratora i obsługi, błędy w JSON-ie dla żądań formularzem, limiter |
+| `DashboardTest` | 7 | doba w strefie każdego kina, definicje brutto/zwroty/netto, doba 25-godzinna, obłożenie, top filmów, feed z bazy, skrypty przed Livewire |
+| `ArticleApiTest` | 5 | tylko widoczne, zaplanowany pojawia się bez inwalidacji, cache i inwalidacja, ROLLBACK, 404 bez nowych kluczy |
+| `ArticleManagementTest` | 5 | dostęp, premiera w strefie sieci, stały slug, godzina nieistniejąca, reguły serwisu i CHECK-i w bazie |
+| `ArticleMarkdownTest` | 11 | formatowanie i 10 przypadków złośliwego wejścia |
+| Etapy 1–6 | 208 | bez zmian w kontraktach API |
+| **Razem** | **420** | |
+
+Bloki E–M przeszły też **testy mutacyjne**: celowo psuty kod (np. usunięty strażnik
+webhooka, brak blokady biletów, doba liczona jako 24 h, szkice w API) musiał wywrócić
+testy. Wszystkie mutacje z wpływem na zachowanie zostały wykryte.
+
+### Etap 7 — weryfikacja na żywo
+
+Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku lustrzanym
+(ten sam kod, PostgreSQL 16, Redis, nginx, Reverb), Stripe'a i testy dymne — na docelowym
+środowisku Docker Compose.
+
+- **Przeglądarka (Playwright)**: logowanie, edytor układu sali, formularz filmu z plakatem,
+  siatka tygodnia z kolizją, kopiowanie dnia, lista rezerwacji i plan sali (administrator
+  i obsługa), anulowanie z potwierdzeniem, formularz artykułu z podglądem — skrypt wklejony
+  do treści się nie wykonał.
+- **Feed na żywo przez nginx i Reverb** w dwóch przeglądarkach naraz: administrator dostał
+  zdarzenia z Warszawy i Krakowa, obsługa Warszawy tylko swoje; zatrzymanie Reverba →
+  status „łączenie…”, start → „połączono”, odtworzenie feedu i kolejne zdarzenia.
+  Na docelowym środowisku pulpit w zwykłej przeglądarce pokazał „Na żywo: połączono”.
+- **Stripe w trybie testowym przez Stripe CLI**: karta testowa „pm_card_visa” → webhook → bilety →
+  capture → anulowanie w panelu → **dokładnie jeden zwrot na pełną kwotę** w Stripe, rezerwacja
+  `refunded`, bilety anulowane; mail w Mailpit z numerem rezerwacji i informacją o zwrocie,
+  bez powodu. Płatność rozpoczęta i niepotwierdzona → anulowanie → płatność `canceled`
+  w Stripe, rezerwacja `cancelled`. Zero zaległych rozliczeń, wpisy komendy w logu schedulera.
+- **Testy dymne przez nginx** po każdym bloku: 419 bez tokenu CSRF, limity logowania,
+  podpisy kanałów i 403 dla obcego kina, plan zapytań po nowych indeksach (`EXPLAIN`),
+  klucze „catalog:…” w Redisie i odpowiedź z cache po zmianie „za plecami” serwisu,
+  dokumentacja Scramble z nowymi endpointami i bez tras panelu, blokada `FOR KEY SHARE`
+  przy `INSERT` na PostgreSQL, deadlock przy przeciwnej kolejności blokad.
+
+### Etap 7 — znane ograniczenia i co dalej
+
+- **Lista artykułów w cache rośnie z liczbą artykułów.** Przy tysiącach — klucze per
+  strona z TTL ograniczonym najbliższą publikacją.
+- **Plan sali w panelu odświeża się co 10 s**, a nie przez kanał seansu — kanał odrzuca
+  seanse rozpoczęte, a panel pokazuje także te.
+- **Feed pulpitu to ostatnie zmiany, nie pełna historia zdarzeń** — po przerwie połączenia
+  odtwarzamy stan rezerwacji z bazy, a nie każde przejście.
+- **Zwrot uznajemy za zakończony po przyjęciu przez Stripe** (`pending` albo `succeeded`);
+  zwrot, który Stripe odrzuci później (zdarzenie „refund.failed”), wymaga obsługi webhooka.
+- **Osierocone pliki plakatów** po awarii między zapisem pliku a COMMIT — nieszkodliwe,
+  sprzątanie komendą w Etapie 10.
+- **Data publikacji artykułów w jednej strefie sieci** (Europe/Warsaw).
+- **Porządki na Etap 10:** zdublowane wpisy w `.env.example` (`SCREENING_ADS_MINUTES`,
+  martwe `SCREENING_CLEANUP_BUFFER`), `CACHE_STORE` i `SESSION_DRIVER` z wartościami
+  `database` w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie), zaufane proxy
+  przy TLS, niespójne wartości `age_rating` w `MovieFactory`, skrypt uruchamiający sondę
+  WebSocket i skrypt zgodności README w CI.
