@@ -16,6 +16,9 @@
             <ul>
                 <li><strong>Kino · panel</strong></li>
                 <li><a href="{{ route('admin.dashboard') }}">Pulpit</a></li>
+                @can('viewAnyInPanel', \App\Models\Booking::class)
+                    <li><a href="{{ route('admin.bookings.index') }}">Rezerwacje</a></li>
+                @endcan
                 @can('viewAny', \App\Models\Cinema::class)
                     <li><a href="{{ route('admin.cinemas.index') }}">Kina</a></li>
                 @endcan

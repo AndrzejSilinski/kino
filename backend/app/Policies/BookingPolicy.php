@@ -44,6 +44,29 @@ class BookingPolicy
     }
 
     /**
+     * Lista rezerwacji w panelu (Etap 7, blok I): administrator i obsługa kina.
+     * Zakres obsługi (tylko jej kino) zawęża zapytanie w komponencie.
+     */
+    public function viewAnyInPanel(User $user): bool
+    {
+        return $user->isAdmin() || $user->isStaff();
+    }
+
+    /**
+     * Szczegóły rezerwacji w panelu: administrator — każda; obsługa — tylko
+     * rezerwacje seansów w swoim kinie. Inna reguła niż view() z API (właściciel).
+     */
+    public function viewInPanel(User $user, Booking $booking): bool
+    {
+        if ($user->isAdmin()) {
+            return true;
+        }
+
+        return $user->isStaff()
+            && (int) $booking->loadMissing('screening.hall')->screening->hall->cinema_id === (int) $user->cinema_id;
+    }
+
+    /**
      * Anulowanie rezerwacji przez klienta.
      *
      * Na razie nikt — anulowanie i zwroty to temat Etapu 4 (Stripe),

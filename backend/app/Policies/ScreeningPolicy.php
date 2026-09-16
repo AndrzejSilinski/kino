@@ -57,6 +57,15 @@ final class ScreeningPolicy
      * Planowanie repertuaru w panelu (Etap 7, blok G2) — wyłącznie administrator.
      * Czy KONKRETNY seans da się zmienić (sprzedaż, stan), rozstrzyga serwis.
      */
+    /**
+     * Podgląd planu sali seansu w panelu (Etap 7, blok I) — ta sama reguła co skanowanie
+     * biletów: administrator wszędzie, obsługa w swoim kinie.
+     */
+    public function viewSeatPlan(User $user, Screening $screening): bool
+    {
+        return $this->validateTickets($user, $screening);
+    }
+
     public function create(User $user): bool
     {
         return $user->isAdmin();

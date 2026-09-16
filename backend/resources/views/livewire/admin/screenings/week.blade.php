@@ -55,7 +55,7 @@
                                         @else
                                             {{ $label }}
                                         @endif
-                                        <small>· bilety {{ $screening->sold_count }}</small>
+                                        <small>· <a href="{{ route('admin.screenings.seats', $screening) }}" title="Plan sali seansu">bilety {{ $screening->sold_count }}</a></small>
                                     </span>
                                 @endforeach
                                 @if ($canPlan && $hall->is_active && $day->greaterThanOrEqualTo($today))

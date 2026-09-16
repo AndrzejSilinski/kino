@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Admin\Auth\LoginController;
+use App\Livewire\Admin\Bookings\BookingIndex;
+use App\Livewire\Admin\Bookings\BookingShow;
 use App\Livewire\Admin\Cinemas\CinemaForm;
 use App\Livewire\Admin\Cinemas\CinemaIndex;
 use App\Livewire\Admin\Dashboard;
@@ -11,6 +13,7 @@ use App\Livewire\Admin\Movies\MovieForm;
 use App\Livewire\Admin\Movies\MovieIndex;
 use App\Livewire\Admin\Screenings\RepertoireCopy;
 use App\Livewire\Admin\Screenings\ScreeningForm;
+use App\Livewire\Admin\Screenings\ScreeningSeatPlan;
 use App\Livewire\Admin\Screenings\ScreeningWeek;
 use Illuminate\Support\Facades\Route;
 
@@ -76,5 +79,14 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
         // Kopiowanie repertuaru z dnia na dzień (blok H) — planowanie, więc tylko administrator.
         Route::livewire('/cinemas/{cinema}/screenings/copy', RepertoireCopy::class)
             ->name('cinemas.screenings.copy')->middleware('can:create,App\Models\Screening');
+
+        // Sprzedaż (blok I): administrator i obsługa kina; zakres obsługi pilnują
+        // Policies i zapytania komponentów.
+        Route::livewire('/bookings', BookingIndex::class)
+            ->name('bookings.index')->middleware('can:viewAnyInPanel,App\Models\Booking');
+        Route::livewire('/bookings/{booking}', BookingShow::class)
+            ->name('bookings.show')->middleware('can:viewInPanel,booking');
+        Route::livewire('/screenings/{screening}/seats', ScreeningSeatPlan::class)
+            ->name('screenings.seats')->middleware('can:viewSeatPlan,screening');
     });
 });
