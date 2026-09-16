@@ -1,6 +1,7 @@
 <?php
 
 return [
+    App\Providers\AdminPanelServiceProvider::class,
     App\Providers\AppServiceProvider::class,
     App\Providers\PaymentServiceProvider::class,
     App\Providers\QueueServiceProvider::class,

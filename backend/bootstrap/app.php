@@ -18,7 +18,16 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        // Panel administracyjny (Etap 7). Gość na trasie z 'auth' trafia na
+        // formularz panelu. Framework domyślnie kieruje na route('login'),
+        // której w projekcie nie ma. Dla /api/* zwracamy null: API nigdy nie
+        // przekierowuje, 401 w JSON-ie nadaje ApiExceptionRenderer.
+        $middleware->redirectGuestsTo(
+            fn (Request $request): ?string => $request->is('api/*') ? null : route('admin.login'),
+        );
+
+        // Zalogowany, który otworzy /admin/login (middleware 'guest'), wraca na pulpit.
+        $middleware->redirectUsersTo(fn (): string => route('admin.dashboard'));
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         // Żądania do /api/* i te z Accept: application/json dostają JSON
