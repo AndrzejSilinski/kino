@@ -3,6 +3,8 @@
 use App\Http\Controllers\Admin\Auth\LoginController;
 use App\Http\Controllers\Admin\BroadcastingAuthController;
 use App\Http\Middleware\ForceJsonResponse;
+use App\Livewire\Admin\Articles\ArticleForm;
+use App\Livewire\Admin\Articles\ArticleIndex;
 use App\Livewire\Admin\Bookings\BookingIndex;
 use App\Livewire\Admin\Bookings\BookingShow;
 use App\Livewire\Admin\Cinemas\CinemaForm;
@@ -68,6 +70,14 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
             ->name('halls.edit')->middleware('can:update,hall');
         Route::livewire('/halls/{hall}/layout', HallLayoutEditor::class)
             ->name('halls.layout')->middleware('can:update,hall');
+
+        // Artykuły (blok M) — wyłącznie administrator; treści są wspólne dla całej sieci.
+        Route::livewire('/articles', ArticleIndex::class)
+            ->name('articles.index')->middleware('can:viewAny,App\Models\Article');
+        Route::livewire('/articles/create', ArticleForm::class)
+            ->name('articles.create')->middleware('can:create,App\Models\Article');
+        Route::livewire('/articles/{article}/edit', ArticleForm::class)
+            ->name('articles.edit')->middleware('can:update,article');
 
         // Filmy i plakaty (blok F) — wyłącznie administrator; film jest wspólny dla całej sieci.
         Route::livewire('/movies', MovieIndex::class)

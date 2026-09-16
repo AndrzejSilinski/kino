@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\ArticleController;
 use App\Http\Controllers\Api\V1\CheckoutController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BookingController;
@@ -77,6 +78,15 @@ Route::get('/screenings/{screening}', [ScreeningController::class, 'show'])
 // Etap 7, blok F: lista filmów w repertuarze sieci (wymóg 1.7 — cache listy filmów).
 Route::get('/movies', [MovieController::class, 'index'])
     ->name('api.movies.index');
+
+// Etap 7, blok M: moduł informacyjny (wymóg 2.4) — opublikowane artykuły z cache.
+// Slug w formacie Str::slug; inny zapis nie trafia nawet do kontrolera (404).
+Route::get('/articles', [ArticleController::class, 'index'])
+    ->name('api.articles.index');
+
+Route::get('/articles/{slug}', [ArticleController::class, 'show'])
+    ->where('slug', '[a-z0-9]+(?:-[a-z0-9]+)*')
+    ->name('api.articles.show');
 
 // ─── 4. Koszyk ───────────────────────────────────────────────────────────
 // Plan sali czyta sesję, żeby odróżnić blokady własne od cudzych, ale

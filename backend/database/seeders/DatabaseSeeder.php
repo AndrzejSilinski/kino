@@ -22,6 +22,7 @@ class DatabaseSeeder extends Seeder
             CinemaSeeder::class,         // kina -> sale -> miejsca
             StaffUserSeeder::class,      // obsluga kina: wymaga istniejacych kin
             ScreeningSeeder::class,      // repertuar + cenniki
+            ArticleSeeder::class,        // Etap 7: aktualności i premiery (wymaga filmów i admina)
         ]);
 
         // Etap 7: po migrate:fresh --seed identyfikatory kin i seansów zaczynają

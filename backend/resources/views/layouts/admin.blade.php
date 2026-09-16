@@ -25,6 +25,9 @@
                 @can('viewAny', \App\Models\Movie::class)
                     <li><a href="{{ route('admin.movies.index') }}">Filmy</a></li>
                 @endcan
+                @can('viewAny', \App\Models\Article::class)
+                    <li><a href="{{ route('admin.articles.index') }}">Aktualności</a></li>
+                @endcan
                 @if ($panelUser->isStaff() && $panelUser->cinema)
                     <li><a href="{{ route('admin.cinemas.screenings.index', $panelUser->cinema) }}">Repertuar</a></li>
                 @endif
