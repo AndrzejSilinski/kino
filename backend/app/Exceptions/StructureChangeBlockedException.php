@@ -64,6 +64,25 @@ final class StructureChangeBlockedException extends CinemaException
         );
     }
 
+    public static function movieDeactivation(int $upcoming): self
+    {
+        return new self(
+            "Nie można wyłączyć filmu, który ma nadchodzące seanse ({$upcoming}). Najpierw je odwołaj.",
+            'MOVIE_HAS_UPCOMING_SCREENINGS',
+            ['upcoming_screenings' => $upcoming],
+        );
+    }
+
+    /** Czas trwania wyznacza koniec seansu (ends_at), zapisany przy jego tworzeniu. */
+    public static function movieDurationChange(int $upcoming): self
+    {
+        return new self(
+            "Nie można zmienić czasu trwania filmu, który ma nadchodzące seanse ({$upcoming}): ich godziny zakończenia i przerwy między seansami zostały policzone ze starej długości.",
+            'MOVIE_DURATION_LOCKED',
+            ['upcoming_screenings' => $upcoming],
+        );
+    }
+
     public static function hallNameTaken(string $name): self
     {
         return new self(

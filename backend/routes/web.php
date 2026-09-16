@@ -7,6 +7,8 @@ use App\Livewire\Admin\Dashboard;
 use App\Livewire\Admin\Halls\HallForm;
 use App\Livewire\Admin\Halls\HallIndex;
 use App\Livewire\Admin\Halls\HallLayoutEditor;
+use App\Livewire\Admin\Movies\MovieForm;
+use App\Livewire\Admin\Movies\MovieIndex;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -51,5 +53,13 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
             ->name('halls.edit')->middleware('can:update,hall');
         Route::livewire('/halls/{hall}/layout', HallLayoutEditor::class)
             ->name('halls.layout')->middleware('can:update,hall');
+
+        // Filmy i plakaty (blok F) — wyłącznie administrator; film jest wspólny dla całej sieci.
+        Route::livewire('/movies', MovieIndex::class)
+            ->name('movies.index')->middleware('can:viewAny,App\Models\Movie');
+        Route::livewire('/movies/create', MovieForm::class)
+            ->name('movies.create')->middleware('can:create,App\Models\Movie');
+        Route::livewire('/movies/{movie}/edit', MovieForm::class)
+            ->name('movies.edit')->middleware('can:update,movie');
     });
 });

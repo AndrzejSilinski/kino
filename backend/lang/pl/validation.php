@@ -28,6 +28,13 @@ return [
     'in' => 'Wybrana wartość pola :attribute jest nieprawidłowa.',
     'regex' => 'Format pola :attribute jest nieprawidłowy.',
 
+    // Pliki (Etap 7, blok F). Bez :attribute: Livewire waliduje wgrywany plik pod
+    // nazwą "files.0" i dopiero potem podmienia ją na nazwę właściwości komponentu.
+    'file' => 'Wybierz plik.',
+    'uploaded' => 'Nie udało się wgrać pliku — najczęściej jest za duży.',
+    'mimes' => 'Dozwolone typy plików: :values.',
+    'dimensions' => 'Obraz ma nieprawidłowe wymiary.',
+
     'min' => [
         'numeric' => 'Pole :attribute nie może być mniejsze niż :min.',
         'string' => 'Pole :attribute musi mieć co najmniej :min znaków.',
@@ -38,6 +45,7 @@ return [
         'numeric' => 'Pole :attribute nie może być większe niż :max.',
         'string' => 'Pole :attribute nie może mieć więcej niż :max znaków.',
         'array' => 'Pole :attribute nie może zawierać więcej niż :max elementów.',
+        'file' => 'Plik nie może być większy niż :max KB.',
     ],
 
     // Klucze reguły Password::min(...)->letters()->numbers().

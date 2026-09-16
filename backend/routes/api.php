@@ -6,6 +6,7 @@ use App\Http\Controllers\Api\V1\BookingController;
 use App\Http\Controllers\Api\V1\BookingTicketsController;
 use App\Http\Controllers\Api\V1\BroadcastingAuthController;
 use App\Http\Controllers\Api\V1\CinemaController;
+use App\Http\Controllers\Api\V1\MovieController;
 use App\Http\Controllers\Api\V1\ScreeningController;
 use App\Http\Controllers\Api\V1\SeatLockController;
 use App\Http\Controllers\Api\V1\SeatMapController;
@@ -72,6 +73,10 @@ Route::get('/cinemas/{cinema}/screenings', [ScreeningController::class, 'index']
 
 Route::get('/screenings/{screening}', [ScreeningController::class, 'show'])
     ->name('api.screenings.show');
+
+// Etap 7, blok F: lista filmów w repertuarze sieci (wymóg 1.7 — cache listy filmów).
+Route::get('/movies', [MovieController::class, 'index'])
+    ->name('api.movies.index');
 
 // ─── 4. Koszyk ───────────────────────────────────────────────────────────
 // Plan sali czyta sesję, żeby odróżnić blokady własne od cudzych, ale

@@ -19,6 +19,9 @@
                 @can('viewAny', \App\Models\Cinema::class)
                     <li><a href="{{ route('admin.cinemas.index') }}">Kina</a></li>
                 @endcan
+                @can('viewAny', \App\Models\Movie::class)
+                    <li><a href="{{ route('admin.movies.index') }}">Filmy</a></li>
+                @endcan
             </ul>
             <ul>
                 <li>

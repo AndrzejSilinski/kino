@@ -34,6 +34,19 @@ class ScreeningFactory extends Factory
      */
     protected static int $slot = 0;
 
+    /**
+     * Zeruje licznik przed każdym testem (woła go Tests\TestCase::setUp).
+     *
+     * Bez tego licznik rósł przez CAŁY przebieg testów: każdy nowy test tworzący
+     * seanse przesuwał seanse kolejnych testów o 6 h, aż wypadały poza 14-dniowy
+     * horyzont kalendarza (Etap 7: CatalogApiTest po dodaniu testów filmów).
+     * Baza jest czyszczona po każdym teście, więc sloty mogą zaczynać się od zera.
+     */
+    public static function resetSlots(): void
+    {
+        static::$slot = 0;
+    }
+
     public function definition(): array
     {
         $ads = (int) config('cinema.screening.ads_minutes', 15);
