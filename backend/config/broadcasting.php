@@ -28,6 +28,13 @@ return [
      */
     'max_payload_bytes' => (int) env('BROADCAST_MAX_PAYLOAD_BYTES', 8000),
 
+    /*
+     * Bezpiecznik (blok H): po nieudanej wysyłce notifier przez tyle sekund
+     * nie łączy się z Reverbem. Stan jest w cache aplikacji (Redis), więc
+     * widzą go wszystkie procesy: php-fpm, worker i scheduler. 0 wyłącza.
+     */
+    'breaker_seconds' => (int) env('BROADCAST_BREAKER_SECONDS', 10),
+
     'connections' => [
 
         'reverb' => [

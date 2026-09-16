@@ -27,9 +27,17 @@ use Throwable;
  *
  * Log bez komunikatu wyjątku (jak decyzja 62): sama klasa wystarcza do
  * diagnozy, a treść błędu HTTP potrafi zawierać adres i fragment żądania.
+ *
+ * BEZPIECZNIK (blok H): po porażce wysyłka jest wstrzymana na kilka sekund
+ * dla wszystkich procesów, więc awaria Reverba kosztuje 0,5 s raz, a nie
+ * przy każdej operacji. Szczegóły: RealtimeCircuitBreaker.
  */
 final class RealtimeNotifier
 {
+    public function __construct(
+        private readonly RealtimeCircuitBreaker $breaker,
+    ) {}
+
     /**
      * Zmiana stanu miejsc. Zbyt duży payload zamienia się w SeatsResync.
      *
@@ -70,6 +78,10 @@ final class RealtimeNotifier
      */
     public function bookingChanged(int $bookingId, BookingStatus $status): bool
     {
+        if ($this->breaker->isOpen()) {
+            return false;
+        }
+
         try {
             $booking = Booking::query()
                 ->with(['screening.movie', 'screening.hall.cinema'])
@@ -99,9 +111,15 @@ final class RealtimeNotifier
         return $this->send(new SalesActivity($booking, $status, $now)) && $sent;
     }
 
-    /** Wysyła zdarzenie; zwraca false i loguje ostrzeżenie, gdy się nie udało. */
+    /** Wysyła zdarzenie; zwraca false, gdy się nie udało albo bezpiecznik jest otwarty. */
     public function send(ShouldBroadcastNow $event): bool
     {
+        // Reverb niedawno zawiódł: nie płacimy kolejnego connect_timeout.
+        // Klienci i tak odzyskają stan przez reconnect ze snapshotem.
+        if ($this->breaker->isOpen()) {
+            return false;
+        }
+
         try {
             // event() rozwiązuje dispatcher w chwili wywołania, więc w testach
             // trafia do Event::fake(), a w aplikacji do broadcastera.
@@ -109,18 +127,22 @@ final class RealtimeNotifier
 
             return true;
         } catch (Throwable $e) {
-            $this->warn($event::class, $e);
+            // Jedno ostrzeżenie na otwarcie — pominięte wysyłki nie zalewają logu.
+            if ($this->breaker->trip()) {
+                $this->warn($event::class, $e, $this->breaker->seconds());
+            }
 
             return false;
         }
     }
 
     /** Ostrzeżenie bez komunikatu wyjątku (decyzja 62): tylko klasy. */
-    private function warn(string $event, Throwable $e): void
+    private function warn(string $event, Throwable $e, int $pausedSeconds = 0): void
     {
         Log::warning('Nie udało się rozgłosić zdarzenia na żywo.', [
             'event' => $event,
             'exception' => $e::class,
+            'paused_seconds' => $pausedSeconds,
         ]);
     }
 }
