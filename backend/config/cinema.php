@@ -52,6 +52,20 @@ return [
     // .env, bo Dotenv nie nadpisuje zmiennych, które już są w środowisku.
     'schedule_output' => env('SCHEDULE_OUTPUT', '/dev/null'),
 
+    // Cache katalogu w Redisie (Etap 7, blok C): repertuar, dni z seansami, kina.
+    // Główna inwalidacja to liczniki generacji podbijane po COMMIT (CatalogCache);
+    // TTL jest zabezpieczeniem i sprzątaniem starych kluczy.
+    'catalog_cache' => [
+
+        'ttl_seconds' => (int) env('CATALOG_CACHE_TTL', 600),
+
+        // Zamek przeciw stampede: jak długo trzymamy go przy liczeniu wartości
+        // i ile sekund inni czytelnicy czekają na gotowy wynik.
+        'lock_seconds' => 10,
+        'lock_wait_seconds' => 2,
+
+    ],
+
     'booking' => [
 
         // Waluta rozliczeniowa. Kwoty trzymamy jako integer w groszach —
