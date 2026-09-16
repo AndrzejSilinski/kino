@@ -73,6 +73,46 @@ final class StructureChangeBlockedException extends CinemaException
         );
     }
 
+    /** Sala z historią sprzedaży albo nadchodzącymi seansami: tożsamość miejsc jest zamrożona. */
+    public static function hallLayoutRestricted(): self
+    {
+        return new self(
+            'Ta sala ma historię sprzedaży albo nadchodzące seanse: można zmieniać tylko kategorię, typ (standard / dla niepełnosprawnych) i dostępność miejsc. Dodawanie, usuwanie i przesuwanie miejsc wymaga nowej sali.',
+            'HALL_LAYOUT_RESTRICTED',
+            [],
+        );
+    }
+
+    /** @param list<string> $labels */
+    public static function hallLayoutSeatsHeld(array $labels): self
+    {
+        return new self(
+            'Trwa sprzedaż miejsc: '.implode(', ', $labels).' (blokada albo oczekująca płatność na nadchodzącym seansie). Spróbuj za kilka minut.',
+            'HALL_LAYOUT_SEATS_HELD',
+            ['seats' => $labels],
+        );
+    }
+
+    /** @param list<string> $labels */
+    public static function hallLayoutSeatsSold(array $labels): self
+    {
+        return new self(
+            'Nie można wyłączyć miejsc sprzedanych na nadchodzące seanse: '.implode(', ', $labels).'.',
+            'HALL_LAYOUT_SEATS_SOLD',
+            ['seats' => $labels],
+        );
+    }
+
+    /** @param list<string> $categories */
+    public static function hallLayoutPricesMissing(array $categories, int $screenings): self
+    {
+        return new self(
+            'Brak cen dla kategorii: '.implode(', ', $categories)." w cenniku {$screenings} nadchodzących seansów tej sali. Najpierw uzupełnij cenniki.",
+            'HALL_LAYOUT_PRICES_MISSING',
+            ['categories' => $categories, 'screenings' => $screenings],
+        );
+    }
+
     public function status(): int
     {
         return 409;

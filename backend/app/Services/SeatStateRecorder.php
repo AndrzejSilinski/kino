@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Services;
 
+use App\Events\SeatsResync;
 use Illuminate\Support\Facades\DB;
 use InvalidArgumentException;
 use LogicException;
@@ -95,6 +96,38 @@ final class SeatStateRecorder
         // żądania HTTP do Reverba: blokady wierszy (w tym licznika) zwalniają
         // się od razu, a awaria Reverba nie może wycofać zapisanej zmiany.
         DB::afterCommit(fn () => $this->realtime->seatsChanged($screeningId, $version, $changes));
+
+        return $version;
+    }
+
+    /**
+     * Zmiana układu sali (Etap 7, blok E): miejsca zmieniły kategorię, typ
+     * albo dostępność, więc klienci muszą pobrać plan od nowa.
+     *
+     * Podbija wersję jak record() — ostatnia instrukcja transakcji, ta sama
+     * kolejność commitów — ale po COMMIT wysyła seats.resync zamiast listy
+     * miejsc: zmiana nie jest przejściem wolne/zajęte/sprzedane.
+     *
+     * @throws LogicException gdy wywołane poza transakcją
+     */
+    public function recordLayoutChange(int $screeningId): int
+    {
+        if (DB::transactionLevel() === 0) {
+            throw new LogicException('SeatStateRecorder::recordLayoutChange() musi być wywołane wewnątrz transakcji.');
+        }
+
+        $row = DB::selectOne(
+            'INSERT INTO screening_seat_versions (screening_id, version, updated_at)
+             VALUES (?, 1, now())
+             ON CONFLICT (screening_id)
+             DO UPDATE SET version = screening_seat_versions.version + 1, updated_at = now()
+             RETURNING version',
+            [$screeningId],
+        );
+
+        $version = (int) $row->version;
+
+        DB::afterCommit(fn () => $this->realtime->send(new SeatsResync($screeningId, $version)));
 
         return $version;
     }

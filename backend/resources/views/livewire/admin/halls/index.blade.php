@@ -36,6 +36,8 @@
                         <td>
                             <a href="{{ route('admin.halls.edit', $hall) }}">Edytuj</a>
                             ·
+                            <a href="{{ route('admin.halls.layout', $hall) }}">Układ</a>
+                            ·
                             <a href="#" wire:click.prevent="toggleActive({{ $hall->id }})"
                                wire:confirm="{{ $hall->is_active ? 'Wyłączyć salę '.$hall->name.'?' : 'Włączyć salę '.$hall->name.'?' }}">
                                 {{ $hall->is_active ? 'Wyłącz' : 'Włącz' }}

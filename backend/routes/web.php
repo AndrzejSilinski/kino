@@ -6,6 +6,7 @@ use App\Livewire\Admin\Cinemas\CinemaIndex;
 use App\Livewire\Admin\Dashboard;
 use App\Livewire\Admin\Halls\HallForm;
 use App\Livewire\Admin\Halls\HallIndex;
+use App\Livewire\Admin\Halls\HallLayoutEditor;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -48,5 +49,7 @@ Route::prefix('admin')->name('admin.')->group(function (): void {
             ->name('cinemas.halls.create')->middleware('can:create,App\Models\Hall');
         Route::livewire('/halls/{hall}/edit', HallForm::class)
             ->name('halls.edit')->middleware('can:update,hall');
+        Route::livewire('/halls/{hall}/layout', HallLayoutEditor::class)
+            ->name('halls.layout')->middleware('can:update,hall');
     });
 });
