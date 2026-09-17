@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Sanctum\HasApiTokens;
 
 /**
@@ -39,7 +40,25 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'role' => UserRole::class,
+            // Etap 8, blok I: ustawienia powiadomień. avatar_path poza $fillable —
+            // zmienia go wyłącznie AvatarService, nigdy masowe przypisanie z żądania.
+            'push_consent_at' => 'immutable_datetime',
+            'screening_reminders' => 'boolean',
         ];
+    }
+
+    /** Zgoda na powiadomienia push (Etap 8, blok I). Uprawnienie przeglądarki to osobna sprawa. */
+    public function wantsPush(): bool
+    {
+        return $this->push_consent_at !== null;
+    }
+
+    /** Publiczny adres avatara albo null (Etap 8, blok I, decyzja: losowa nazwa w /storage). */
+    public function avatarUrl(): ?string
+    {
+        return $this->avatar_path !== null
+            ? Storage::disk('public')->url($this->avatar_path)
+            : null;
     }
 
     /** Rezerwacje tego użytkownika — potrzebne w kroku 3.7 i w Policy. */

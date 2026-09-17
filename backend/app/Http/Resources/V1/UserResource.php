@@ -28,6 +28,9 @@ class UserResource extends JsonResource
             'id' => $this->id,
             'name' => $this->name,
             'email' => $this->email,
+            // Etap 8, blok I: pełny adres z APP_URL (jak poster_url). Losowa nazwa pliku —
+            // adres zna tylko ten, komu API go pokazało; patrz AvatarService.
+            'avatar_url' => $this->avatarUrl(),
             // Zgodnie z kontraktem: surowa wartość enuma dla maszyny
             // plus etykieta po polsku, żeby klient nie trzymał
             // własnego słownika tłumaczeń.

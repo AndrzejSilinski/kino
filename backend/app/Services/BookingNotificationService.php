@@ -71,6 +71,10 @@ final class BookingNotificationService
      * Seans musi być zaplanowany i jeszcze się nie zacząć — po przerwie
      * schedulera przypomnienie przyjdzie później, ale nigdy po starcie.
      *
+     * Zgoda klienta (Etap 8, blok I): rezerwacji osób z wyłączonymi przypomnieniami NIE zajmujemy
+     * (reminder_sent_at zostaje NULL). Kto włączy przypomnienia przed oknem, dostanie je normalnie;
+     * decyduje zgoda w chwili wysyłki, nie w chwili zakupu.
+     *
      * Bindowanie pozycyjne (?), a nie nazwane: PDO dla PostgreSQL bez
      * emulacji zapytań nie pozwala użyć tej samej nazwy parametru dwa razy.
      *
@@ -85,8 +89,10 @@ final class BookingNotificationService
                 UPDATE bookings AS b
                 SET reminder_sent_at = CAST(? AS timestamptz),
                     updated_at = CAST(? AS timestamp)
-                FROM screenings AS s
+                FROM screenings AS s, users AS u
                 WHERE s.id = b.screening_id
+                  AND u.id = b.user_id
+                  AND u.screening_reminders = true
                   AND b.status = ?
                   AND b.reminder_sent_at IS NULL
                   AND s.status = ?

@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AccountAvatarController;
+use App\Http\Controllers\Api\V1\AccountController;
 use App\Http\Controllers\Api\V1\ArticleController;
 use App\Http\Controllers\Api\V1\CheckoutController;
 use App\Http\Controllers\Api\V1\AuthController;
@@ -10,6 +12,7 @@ use App\Http\Controllers\Api\V1\BroadcastingAuthController;
 use App\Http\Controllers\Api\V1\CinemaController;
 use App\Http\Controllers\Api\V1\ClientConfigController;
 use App\Http\Controllers\Api\V1\MovieController;
+use App\Http\Controllers\Api\V1\NotificationSettingsController;
 use App\Http\Controllers\Api\V1\ScreeningController;
 use App\Http\Controllers\Api\V1\SeatLockController;
 use App\Http\Controllers\Api\V1\SeatMapController;
@@ -65,6 +68,27 @@ Route::prefix('auth')->name('api.auth.')->group(function () {
         Route::get('/me', [AuthController::class, 'me'])->name('me');
     });
 });
+
+// Profil, hasło, avatar i ustawienia powiadomień (Etap 8, blok I). Wszystko działa na
+// zalogowanym użytkowniku — bez identyfikatora konta w adresie. Odczyt profilu: GET /auth/me.
+// Limit "account" per użytkownik na zmiany; zmiana hasła ma własny, ciaśniejszy limit,
+// bo pole current_password pozwalałoby zgadywać hasło skradzionym tokenem.
+Route::middleware('auth:sanctum')
+    ->prefix('account')
+    ->name('api.account.')
+    ->group(function () {
+        Route::get('/notifications', [NotificationSettingsController::class, 'show'])->name('notifications.show');
+
+        Route::middleware('throttle:account')->group(function () {
+            Route::patch('/profile', [AccountController::class, 'updateProfile'])->name('profile.update');
+            Route::put('/password', [AccountController::class, 'changePassword'])
+                ->middleware('throttle:password-change')
+                ->name('password.update');
+            Route::post('/avatar', [AccountAvatarController::class, 'store'])->name('avatar.store');
+            Route::delete('/avatar', [AccountAvatarController::class, 'destroy'])->name('avatar.destroy');
+            Route::patch('/notifications', [NotificationSettingsController::class, 'update'])->name('notifications.update');
+        });
+    });
 
 // ─── 3. Katalog (publiczny) ──────────────────────────────────────────────
 Route::get('/cinemas', [CinemaController::class, 'index'])

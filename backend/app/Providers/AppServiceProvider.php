@@ -67,6 +67,17 @@ class AppServiceProvider extends ServiceProvider
             return Limit::perHour(10)->by('register:'.$request->ip());
         });
 
+        // Zmiany na koncie (Etap 8, blok I): per użytkownik, nie per IP — trasy wymagają tokenu.
+        RateLimiter::for('account', function (Request $request): Limit {
+            return Limit::perMinute(30)->by('account:'.$request->user()?->id);
+        });
+
+        // Zmiana hasła: pole current_password to wyrocznia hasła dla posiadacza tokenu.
+        // 5 prób na 10 minut nie przeszkadza człowiekowi, a zatrzymuje zgadywanie.
+        RateLimiter::for('password-change', function (Request $request): Limit {
+            return Limit::perMinutes(10, 5)->by('password-change:'.$request->user()?->id);
+        });
+
         // Blokowanie miejsc: kluczem jest SESJA ZAKUPOWA, nie IP.
         // Klienci w galerii dzielą jedno publiczne IP za NAT-em,
         // więc limit per IP odciąłby całą salę podczas premiery.

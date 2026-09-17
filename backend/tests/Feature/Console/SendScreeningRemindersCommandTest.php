@@ -61,6 +61,23 @@ final class SendScreeningRemindersCommandTest extends TestCase
         }
     }
 
+    public function test_klient_z_wylaczonymi_przypomnieniami_ich_nie_dostaje_a_rezerwacja_nie_jest_zajeta(): void
+    {
+        $optedOut = $this->booking(startsInMinutes: 90, paidMinutesBeforeStart: 180);
+        $optedOut->user()->update(['screening_reminders' => false]);
+
+        $this->artisan('cinema:screenings:send-reminders')
+            ->expectsOutput('Wysłane przypomnienia: 0')
+            ->assertSuccessful();
+
+        Notification::assertNothingSent();
+        // Niezajęta: jeśli klient włączy przypomnienia przed seansem, dostanie je przy kolejnym przebiegu.
+        $this->assertNull($optedOut->refresh()->reminder_sent_at);
+
+        $optedOut->user()->update(['screening_reminders' => true]);
+        $this->artisan('cinema:screenings:send-reminders')->expectsOutput('Wysłane przypomnienia: 1')->assertSuccessful();
+    }
+
     public function test_drugie_uruchomienie_nie_wysyla_ponownie(): void
     {
         $this->booking(startsInMinutes: 90, paidMinutesBeforeStart: 180);
