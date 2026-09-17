@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import { routes } from '@/router';
+import { routes, stripStripeReturnParams } from '@/router';
 
 const makeRouter = () => createRouter({ history: createMemoryHistory(), routes });
 
@@ -17,6 +17,22 @@ describe('router', () => {
 
     expect(router.resolve('/screenings/334/checkout')).toMatchObject({ name: 'checkout', meta: { requiresAuth: true } });
     expect(router.resolve('/screenings/334/seats').meta.requiresAuth).toBeUndefined();
+  });
+
+  it('parametry powrotu ze Stripe\'a (z client_secret) znikają z adresu, redirect_status zostaje', () => {
+    const router = makeRouter();
+    const secret = ['pi', 'atrapa', 'secret', 'atrapa'].join('_');
+    const to = router.resolve(`/bookings/01M2QM60X2F0WC7SXBC2E7Q7VA/payment-result?payment_intent=pi_atrapa&payment_intent_client_secret=${secret}&redirect_status=failed`);
+
+    expect(stripStripeReturnParams(to)).toEqual({ path: '/bookings/01M2QM60X2F0WC7SXBC2E7Q7VA/payment-result', query: { redirect_status: 'failed' }, hash: '', replace: true });
+    expect(stripStripeReturnParams(router.resolve('/screenings/334/seats?x=1'))).toBe(true);
+  });
+
+  it('wynik płatności wymaga konta i przyjmuje tylko numer rezerwacji w formacie ULID', () => {
+    const router = makeRouter();
+
+    expect(router.resolve('/bookings/01M2QM60X2F0WC7SXBC2E7Q7VA/payment-result')).toMatchObject({ name: 'payment-result', meta: { requiresAuth: true } });
+    expect(router.resolve('/bookings/123/payment-result').name).toBe('not-found');
   });
 
   it('każdy nieznany adres obsługuje ekran 404 (nginx oddaje index.html dla wszystkich ścieżek SPA)', async () => {

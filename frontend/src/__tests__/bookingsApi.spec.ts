@@ -43,6 +43,16 @@ describe('API rezerwacji', () => {
     expect((await api.checkout(334)).created).toBe(false);
   });
 
+  it('szczegóły rezerwacji: GET z tokenem, bez nagłówka sesji zakupowej', async () => {
+    const { api, fetchMock, sent } = setup();
+    fetchMock.mockResolvedValue(json(200, { data: booking({ status: 'paid', status_label: 'Opłacona' }) }));
+
+    expect((await api.show(REFERENCE)).status).toBe('paid');
+    expect(sent().url).toBe(`/api/v1/bookings/${REFERENCE}`);
+    expect(sent().headers.get('Authorization')).toBe('Bearer token-testowy');
+    expect(sent().headers.get('X-Session-Id')).toBeNull();
+  });
+
   it('rezygnacja: DELETE na podzasobie payment, bez nagłówka sesji zakupowej', async () => {
     const { api, fetchMock, sent } = setup();
     fetchMock.mockResolvedValue(json(200, { data: booking({ status: 'cancelled', status_label: 'Anulowana' }) }));

@@ -7,8 +7,13 @@ import { booking, checkoutResult, pendingCart, REFERENCE } from './fixtures/chec
 import { cartOf, mapSeat, snapshot } from './fixtures/seats';
 
 const seats = vi.hoisted(() => ({ seatMap: vi.fn(), cart: vi.fn(), lock: vi.fn(), release: vi.fn(), releaseAll: vi.fn() }));
-const bookings = vi.hoisted(() => ({ checkout: vi.fn(), abandonPayment: vi.fn() }));
+const bookings = vi.hoisted(() => ({ checkout: vi.fn(), abandonPayment: vi.fn(), show: vi.fn() }));
 vi.mock('@/api/client', () => ({ seatsApi: seats, bookingsApi: bookings }));
+// Stripe.js zastąpiony atrapą: formularz "gotowy" od razu, potwierdzenie sterowane z testu.
+const paymentUi = vi.hoisted(() => ({ mount: vi.fn(async () => {}), confirm: vi.fn(), destroy: vi.fn() }));
+const createStripePaymentUi = vi.hoisted(() => vi.fn());
+vi.mock('@/payments/stripe', () => ({ createStripePaymentUi }));
+vi.mock('@/realtime', () => ({ getRealtimeConnection: vi.fn(async () => { throw new Error('bez WebSocketu w teście'); }) }));
 
 const { routes } = await import('@/router');
 const { default: CheckoutView } = await import('@/views/CheckoutView.vue');
@@ -29,6 +34,27 @@ describe('ekran podsumowania i płatności', () => {
     vi.resetAllMocks();
     setActivePinia(createPinia());
     seats.seatMap.mockResolvedValue(mine());
+    paymentUi.mount.mockResolvedValue(undefined);
+    createStripePaymentUi.mockResolvedValue(paymentUi);
+  });
+
+  it('formularz dostaje klucz publiczny i client_secret z checkoutu; po potwierdzeniu — ekran wyniku, sekret znika z pamięci', async () => {
+    seats.cart.mockResolvedValue(pendingCart([A1]));
+    bookings.checkout.mockResolvedValue({ created: false, result: checkoutResult() });
+    bookings.show.mockReturnValue(new Promise(() => {}));
+    paymentUi.confirm.mockResolvedValue({ kind: 'confirmed', status: 'requires_capture' });
+    const { wrapper, router } = await mountView();
+    const { useCheckoutStore } = await import('@/stores/checkout');
+
+    expect(createStripePaymentUi).toHaveBeenCalledWith(expect.objectContaining({ publishableKey: checkoutResult().payment.publishable_key, clientSecret: checkoutResult().payment.client_secret }));
+    expect(wrapper.get('[data-test="pay"]').text()).toBe('Zapłać 17,60 zł');
+
+    await wrapper.get('[data-test="payment-form"]').trigger('submit');
+    await flushPromises();
+
+    expect(paymentUi.confirm).toHaveBeenCalledWith(`http://localhost:3000/bookings/${REFERENCE}/payment-result`);
+    await vi.waitFor(() => expect(router.currentRoute.value.name).toBe('payment-result'));
+    expect(useCheckoutStore().result).toBeNull();
   });
 
   it('podsumowanie -> "Przejdź do płatności" -> checkout i miejsce na formularz z kwotą i terminem', async () => {
@@ -38,7 +64,7 @@ describe('ekran podsumowania i płatności', () => {
 
     expect(wrapper.get('h1').text()).toBe('Podsumowanie zamówienia');
     expect(wrapper.get('[data-test="countdown"]').text()).toBe('7:00');
-    expect(wrapper.find('[data-test="payment-slot"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="payment-form"]').exists()).toBe(false);
 
     await wrapper.get('[data-test="start-payment"]').trigger('click');
     await flushPromises();
@@ -47,7 +73,7 @@ describe('ekran podsumowania i płatności', () => {
     expect(wrapper.get('h1').text()).toBe('Płatność');
     expect(wrapper.get('[data-test="payment-total"]').text()).toBe('17,60 zł');
     expect(wrapper.get('[data-test="countdown"]').text()).toBe('9:58');
-    expect(wrapper.find('[data-test="payment-slot"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="payment-form"]').exists()).toBe(true);
     // Koszyk odświeżony po checkoucie: plan sali po powrocie będzie wiedział o płatności.
     expect(seats.cart).toHaveBeenCalledTimes(2);
   });
@@ -58,7 +84,7 @@ describe('ekran podsumowania i płatności', () => {
     const { wrapper } = await mountView();
 
     expect(bookings.checkout).toHaveBeenCalledTimes(1);
-    expect(wrapper.find('[data-test="payment-slot"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="payment-form"]').exists()).toBe(true);
   });
 
   it('pusty koszyk: nic do opłacenia i odnośnik do planu sali', async () => {
@@ -88,7 +114,7 @@ describe('ekran podsumowania i płatności', () => {
     expect(seats.releaseAll).toHaveBeenCalledWith(334);
     expect(bookings.checkout).toHaveBeenCalledTimes(2);
     expect(wrapper.find('[data-test="checkout-problem"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="payment-slot"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="payment-form"]').exists()).toBe(true);
   });
 
   it('operator płatności niedostępny (503): komunikat i ponowienie tego samego żądania', async () => {
@@ -104,7 +130,7 @@ describe('ekran podsumowania i płatności', () => {
     await flushPromises();
 
     expect(bookings.checkout).toHaveBeenCalledTimes(2);
-    expect(wrapper.find('[data-test="payment-slot"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="payment-form"]').exists()).toBe(true);
   });
 
   it('rezygnacja z płatności wraca do planu sali z pustym koszykiem', async () => {

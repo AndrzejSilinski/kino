@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /*
- * Podsumowanie i płatność (Etap 8, blok H2; formularz Stripe dochodzi w bloku H3).
+ * Podsumowanie i płatność (Etap 8, blok H2; formularz Stripe z bloku H3).
  *
  * Etapy ekranu wynikają ze stanu SERWERA, nie z historii kliknięć:
  *   - koszyk bez pending_booking   -> podsumowanie z przyciskiem "Przejdź do płatności" (POST checkout),
@@ -13,6 +13,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterLink, useRoute, useRouter } from 'vue-router';
+import PaymentForm from '@/components/checkout/PaymentForm.vue';
 import CartPanel from '@/components/seats/CartPanel.vue';
 import CountdownTimer from '@/components/seats/CountdownTimer.vue';
 import { dateOf, formatDayLabel, timeOf } from '@/lib/datetime';
@@ -29,6 +30,8 @@ const checkout = useCheckoutStore();
 const id = computed(() => Number(route.params.id));
 const screening = computed(() => seatMap.screening);
 const loading = ref(true);
+/** Trwa potwierdzanie w Stripe.js (np. okno 3-D Secure): rezygnacja w tej chwili rozjechałaby stany. */
+const paying = ref(false);
 
 type Stage = 'loading' | 'error' | 'starting' | 'payment' | 'expired' | 'empty' | 'summary';
 
@@ -76,12 +79,29 @@ async function abandon(): Promise<void> {
   }
 }
 
+/** Adres powrotu dla metod z przekierowaniem; Stripe dopisze do niego parametry, które usuwa router. */
+const returnUrl = computed(() => {
+  const reference = checkout.result?.booking.reference ?? '';
+  return `${window.location.origin}${router.resolve({ name: 'payment-result', params: { reference } }).href}`;
+});
+
+/** Stripe.js skończył swoją część; o opłaceniu rozstrzyga webhook — czeka na niego ekran wyniku. */
+async function onConfirmed(): Promise<void> {
+  const reference = checkout.result?.booking.reference;
+  if (!reference) {
+    return;
+  }
+  await router.push({ name: 'payment-result', params: { reference } });
+  // client_secret nie jest już potrzebny — nie trzymamy go w pamięci dłużej, niż trzeba.
+  checkout.reset();
+}
+
 function onVisibility(): void {
   if (document.visibilityState !== 'visible') {
     return;
   }
   // Uśpiony laptop: licznik mógł stanąć. Świeży termin z serwera zamiast lokalnego zegara.
-  if (stage.value === 'payment') {
+  if (stage.value === 'payment' && !paying.value) {
     void checkout.start(id.value);
   } else if (stage.value === 'summary') {
     void cart.resync();
@@ -158,10 +178,17 @@ onBeforeUnmount(() => document.removeEventListener('visibilitychange', onVisibil
         <section class="stack" aria-labelledby="payment-heading">
           <h2 id="payment-heading">Do zapłaty: <span data-test="payment-total">{{ checkout.result.booking.total.formatted }}</span></h2>
           <CountdownTimer :deadline="checkout.deadline" @expire="checkout.onPaymentExpired" />
-          <div class="payment-slot" data-test="payment-slot">
-            <p>Formularz płatności Stripe pojawi się tutaj w kolejnym kroku budowy aplikacji.</p>
-          </div>
-          <button type="button" class="link-button" :disabled="checkout.phase === 'abandoning'" data-test="abandon-payment" @click="abandon">
+          <PaymentForm
+            :key="checkout.result.payment.client_secret"
+            :publishable-key="checkout.result.payment.publishable_key"
+            :client-secret="checkout.result.payment.client_secret"
+            :return-url="returnUrl"
+            :amount="checkout.result.booking.total.formatted"
+            :disabled="checkout.phase === 'abandoning'"
+            @busy="paying = $event"
+            @confirmed="onConfirmed"
+          />
+          <button type="button" class="link-button" :disabled="checkout.phase === 'abandoning' || paying" data-test="abandon-payment" @click="abandon">
             Zrezygnuj z płatności
           </button>
         </section>

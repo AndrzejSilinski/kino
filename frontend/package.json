@@ -15,6 +15,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@stripe/stripe-js": "9.16.0",
     "pinia": "4.0.3",
     "pusher-js": "8.6.0",
     "vue": "3.5.42",

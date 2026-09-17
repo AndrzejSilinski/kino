@@ -16,6 +16,8 @@ export interface CheckoutResponse {
 
 export interface BookingsApi {
   checkout(screeningId: number): Promise<CheckoutResponse>;
+  /** Szczegóły rezerwacji właściciela (seans, bilety). 403/404 dla cudzej albo nieistniejącej. */
+  show(reference: string, signal?: AbortSignal): Promise<Booking>;
   abandonPayment(reference: string): Promise<Booking>;
 }
 
@@ -27,6 +29,9 @@ export function createBookingsApi(http: HttpClient): BookingsApi {
         bookingSession: true,
       });
       return { created: status === 201, result: body.data };
+    },
+    async show(reference, signal) {
+      return (await http.request<Envelope<Booking>>(`/bookings/${encodeURIComponent(reference)}`, { signal })).body.data;
     },
     async abandonPayment(reference) {
       return (await http.request<Envelope<Booking>>(`/bookings/${encodeURIComponent(reference)}/payment`, { method: 'DELETE' })).body.data;

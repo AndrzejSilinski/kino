@@ -138,6 +138,11 @@ export const useCartStore = defineStore('cart', () => {
     closed.value = seatMap.screening?.is_bookable === false;
     if (seatMap.seats.some((seat) => seat.status === 'held_by_you')) {
       await refreshCart();
+    } else {
+      // Migawka bez własnych blokad = serwer nie ma naszego koszyka (np. płatność zakończona w bloku H3,
+      // blokady zamienione w bilety). Stary koszyk w pamięci pokazałby zamrożony plan i nieaktualne miejsca.
+      cart.value = null;
+      deadline.value = null;
     }
   }
 

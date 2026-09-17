@@ -715,8 +715,7 @@ button:disabled {
   margin: 0;
 }
 
-.payment-slot {
-  padding: var(--space);
-  border: 1px dashed var(--color-muted);
-  border-radius: var(--radius);
+/* Blok H3: ramki Stripe'a mają własny wygląd (appearance); tu tylko odstęp i minimalna wysokość na czas ładowania. */
+.payment-element {
+  min-height: 4rem;
 }

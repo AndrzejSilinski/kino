@@ -53,6 +53,18 @@ describe('koszyk z rozpoczętą płatnością (blok H2)', () => {
     expect(seatMap.byId.get(A1)?.status).toBe('held_by_you');
   });
 
+  it('powrót na plan po opłaceniu: migawka bez własnych blokad czyści koszyk z pamięci (bez zamrożenia)', async () => {
+    const { cart } = await startedWithPendingPayment();
+    api.seatMap.mockResolvedValue(snapshot([mapSeat({ position: { x: 1, y: 1 }, status: 'sold' }), mapSeat({ position: { x: 2, y: 1 } })], 9));
+
+    await cart.start(334);
+
+    expect(cart.cart).toBeNull();
+    expect(cart.pendingBooking).toBeNull();
+    expect(cart.deadline).toBeNull();
+    expect(api.cart).toHaveBeenCalledTimes(1);
+  });
+
   it('po rezygnacji z płatności: pusty koszyk, odmrożony plan i świeża migawka', async () => {
     const { cart, seatMap } = await startedWithPendingPayment();
     api.cart.mockResolvedValue(cartOf([]));

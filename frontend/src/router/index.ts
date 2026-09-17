@@ -5,7 +5,7 @@
  * Widoki ładowane leniwie (import()) — każdy ekran to osobny plik JS, a strona startowa
  * nie pobiera kodu planu sali ani Stripe'a.
  */
-import { createRouter, createWebHistory, type RouteRecordRaw } from 'vue-router';
+import { createRouter, createWebHistory, type RouteLocationNormalized, type RouteLocationRaw, type RouteRecordRaw } from 'vue-router';
 import { readRememberedCinema } from '@/stores/cinema';
 
 export const routes: RouteRecordRaw[] = [
@@ -41,6 +41,13 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Podsumowanie i płatność', requiresAuth: true },
   },
   {
+    // Wynik płatności (blok H3): return_url Stripe'a i cel po potwierdzeniu w formularzu.
+    path: '/bookings/:reference([0-9A-Z]{26})/payment-result',
+    name: 'payment-result',
+    component: () => import('@/views/PaymentResultView.vue'),
+    meta: { title: 'Wynik płatności', requiresAuth: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),
@@ -69,11 +76,30 @@ export const routes: RouteRecordRaw[] = [
   },
 ];
 
+/** Parametry dopisywane przez Stripe do return_url; client_secret pozwala dokończyć cudzą płatność. */
+export const STRIPE_RETURN_PARAMS = ['payment_intent', 'payment_intent_client_secret', 'setup_intent', 'setup_intent_client_secret'];
+
+/**
+ * Usuwa z adresu parametry powrotu ze Stripe'a, zanim cokolwiek je zobaczy (blok H3).
+ * Strażnik globalny, zarejestrowany PRZED strażnikiem logowania z main.ts: inaczej wygasła sesja
+ * przepisałaby pełny adres z client_secret do ?redirect= strony logowania, a stamtąd do historii.
+ * redirect_status zostaje — nie jest tajny, a poprawia komunikat ekranu wyniku.
+ */
+export function stripStripeReturnParams(to: Pick<RouteLocationNormalized, 'path' | 'query' | 'hash'>): RouteLocationRaw | true {
+  if (!STRIPE_RETURN_PARAMS.some((name) => name in to.query)) {
+    return true;
+  }
+  const query = Object.fromEntries(Object.entries(to.query).filter(([name]) => !STRIPE_RETURN_PARAMS.includes(name)));
+  return { path: to.path, query, hash: to.hash, replace: true };
+}
+
 export const router = createRouter({
   history: createWebHistory(),
   routes,
   scrollBehavior: () => ({ top: 0 }),
 });
+
+router.beforeEach(stripStripeReturnParams);
 
 router.afterEach((to) => {
   const title = typeof to.meta.title === 'string' ? to.meta.title : '';
