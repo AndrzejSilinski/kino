@@ -43,6 +43,15 @@ describe('router', () => {
     expect(router.resolve('/account/notifications')).toMatchObject({ name: 'account-notifications', meta: { requiresAuth: true } });
   });
 
+  it('artykuły publiczne; slug tylko z małych liter, cyfr i myślników', () => {
+    const router = makeRouter();
+
+    expect(router.resolve('/news')).toMatchObject({ name: 'articles' });
+    expect(router.resolve('/news/premiera-diuny-2026')).toMatchObject({ name: 'article', meta: {} });
+    expect(router.resolve('/news/premiera-diuny').meta.requiresAuth).toBeUndefined();
+    expect(router.resolve('/news/Zly_Slug').name).toBe('not-found');
+  });
+
   it('każdy nieznany adres obsługuje ekran 404 (nginx oddaje index.html dla wszystkich ścieżek SPA)', async () => {
     const router = makeRouter();
     await router.push('/nie/ma/takiej/strony?x=1');

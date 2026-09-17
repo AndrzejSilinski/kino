@@ -853,3 +853,61 @@ input[type="file"].visually-hidden:focus-visible + .button-link {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/* ─── Blok M: artykuły ─────────────────────────────────────────────────── */
+.site-nav {
+  margin-right: auto;
+}
+
+.account-nav .link-button.is-active {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.article-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 18rem), 1fr));
+}
+
+.article-card {
+  padding: var(--space);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.article-card h2 {
+  margin: 0.25rem 0;
+  font-size: 1.15rem;
+}
+
+.article-card p {
+  margin: 0.25rem 0;
+}
+
+.narrow-text {
+  max-width: 44rem;
+}
+
+.article-lead {
+  font-size: 1.1rem;
+}
+
+.article-body {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* Obrazy i tabele z Markdown nie mogą poszerzać strony na telefonie (jak plan sali w bloku G2). */
+.article-body img,
+.article-body table {
+  max-width: 100%;
+  height: auto;
+}
+
+.article-body pre {
+  overflow-x: auto;
+}

@@ -53,6 +53,24 @@ export interface RegisterPayload {
   password_confirmation: string;
 }
 
+export type ArticleType = 'news' | 'premiere';
+
+/** ArticleListItemResource (Etap 7, blok L). movie — powiązany film, jeśli artykuł o nim jest. */
+export interface ArticleListItem {
+  slug: string;
+  type: ArticleType;
+  type_label: string;
+  title: string;
+  excerpt: string | null;
+  published_at: string | null;
+  movie: { slug: string; title: string } | null;
+}
+
+/** ArticleResource: body_html wygenerowany z Markdown i OCZYSZCZONY na serwerze (decyzja 183). */
+export interface Article extends ArticleListItem {
+  body_html: string;
+}
+
 /** Lista stronicowana Laravela (links + meta). */
 export interface Paginated<T> {
   data: T[];

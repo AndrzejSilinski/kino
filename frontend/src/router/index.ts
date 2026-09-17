@@ -55,6 +55,20 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Wynik płatności', requiresAuth: true },
   },
   {
+    // Aktualności i premiery (blok M) — publiczne, bez logowania. ?type=news|premiere i ?page= w adresie.
+    path: '/news',
+    name: 'articles',
+    component: () => import('@/views/ArticlesView.vue'),
+    meta: { title: 'Aktualności i premiery' },
+  },
+  {
+    // Slug niezmienny po publikacji (decyzja 186): Str::slug daje małe litery, cyfry i myślniki.
+    path: '/news/:slug([a-z0-9-]+)',
+    name: 'article',
+    component: () => import('@/views/ArticleView.vue'),
+    meta: { title: 'Artykuł' },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),

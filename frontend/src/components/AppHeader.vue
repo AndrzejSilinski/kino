@@ -14,6 +14,9 @@ async function logout(): Promise<void> {
 <template>
   <header class="site-header">
     <RouterLink to="/" class="brand">Kino</RouterLink>
+    <nav aria-label="Serwis" class="site-nav">
+      <RouterLink :to="{ name: 'articles' }">Aktualności i premiery</RouterLink>
+    </nav>
     <nav aria-label="Konto">
       <template v-if="auth.isAuthenticated">
         <RouterLink :to="{ name: 'account' }">{{ auth.user?.name ?? 'Moje konto' }}</RouterLink>

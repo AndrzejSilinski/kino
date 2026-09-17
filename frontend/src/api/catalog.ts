@@ -3,7 +3,10 @@
  * Kształty z CinemaController, ScreeningController, ScreeningListItemResource i ScreeningResource.
  */
 import type { HttpClient } from './http';
-import type { Cinema, CinemaGroup, Envelope, Paginated, ScreeningDate, ScreeningDetails, ScreeningListItem } from './types';
+import type { Article, ArticleListItem, ArticleType, Cinema, CinemaGroup, Envelope, Paginated, ScreeningDate, ScreeningDetails, ScreeningListItem } from './types';
+
+/** Rozmiar strony listy artykułów (serwer przyjmuje per_page do 50). */
+export const ARTICLES_PER_PAGE = 12;
 
 /** Serwer przyjmuje per_page do 100 (ScreeningDayRequest). */
 const SCREENINGS_PER_PAGE = 100;
@@ -22,6 +25,9 @@ export interface CatalogApi {
   screeningDates(slug: string, signal?: AbortSignal): Promise<ScreeningDatesResponse>;
   screeningsForDay(slug: string, date: string, signal?: AbortSignal): Promise<ScreeningListItem[]>;
   screening(id: number, signal?: AbortSignal): Promise<ScreeningDetails>;
+  /** Aktualności i premiery (blok M): opublikowane, od najnowszych; bez type — oba rodzaje. */
+  articles(type: ArticleType | null, page: number, signal?: AbortSignal): Promise<Paginated<ArticleListItem>>;
+  article(slug: string, signal?: AbortSignal): Promise<Article>;
 }
 
 export function createCatalogApi(http: HttpClient): CatalogApi {
@@ -51,6 +57,16 @@ export function createCatalogApi(http: HttpClient): CatalogApi {
         }
       }
       return items;
+    },
+    async articles(type, page, signal) {
+      return (await http.request<Paginated<ArticleListItem>>('/articles', {
+        query: { type, page, per_page: ARTICLES_PER_PAGE },
+        signal,
+        auth: false,
+      })).body;
+    },
+    async article(slug, signal) {
+      return (await http.request<Envelope<Article>>(`/articles/${encodeURIComponent(slug)}`, { signal, auth: false })).body.data;
     },
     async screening(id, signal) {
       return (await http.request<Envelope<ScreeningDetails>>(`/screenings/${id}`, { signal, auth: false })).body.data;
