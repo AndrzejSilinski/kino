@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
+import { createPinia, setActivePinia } from 'pinia';
 import { ApiError } from '@/api/errors';
 import type { NotificationSettings } from '@/api/types';
 import { deferred } from './fixtures/seats';
 
 const account = vi.hoisted(() => ({ notificationSettings: vi.fn(), updateNotificationSettings: vi.fn() }));
 vi.mock('@/api/client', () => ({ accountApi: account }));
+// Panel przeglądarki (blok L) ma własne testy; tu push wyłączony w konfiguracji instalacji.
+vi.mock('@/api/clientConfig', () => ({ loadClientConfig: vi.fn(async () => ({ push: { enabled: false } })) }));
 
 const { default: AccountNotificationsView } = await import('@/views/account/AccountNotificationsView.vue');
 
@@ -13,7 +16,8 @@ const defaults: NotificationSettings = { push_enabled: false, push_consent_at: n
 
 describe('ustawienia powiadomień', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    vi.clearAllMocks();
+    setActivePinia(createPinia());
     account.notificationSettings.mockResolvedValue(defaults);
   });
 
@@ -37,6 +41,7 @@ describe('ustawienia powiadomień', () => {
     await flushPromises();
     expect(push.element.checked).toBe(true);
     expect(push.attributes('disabled')).toBeUndefined();
+    expect(wrapper.get('[data-test="push-unavailable"]').text()).toContain('nie są jeszcze włączone');
   });
 
   it('błąd zapisu: przełącznik zostaje w stanie z serwera i widać komunikat', async () => {

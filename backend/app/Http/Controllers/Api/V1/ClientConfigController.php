@@ -41,11 +41,29 @@ final class ClientConfigController extends Controller
                     'max_seats_per_session' => (int) config('cinema.seat_lock.max_seats_per_session'),
                     'payment_window_seconds' => (int) config('payments.window_seconds'),
                 ],
-                // Web Push (FCM) dojdzie w blokach K i L; do tego czasu klient wie, że push jest wyłączony.
-                'push' => [
-                    'enabled' => false,
-                ],
+                // Web Push przez FCM (blok L): konfiguracja aplikacji web Firebase i publiczny klucz VAPID.
+                // Plik konta serwisowego (sekret) NIGDY tu nie trafia — tylko wartości, które i tak
+                // widzi każda przeglądarka korzystająca z Firebase.
+                'push' => $this->push(),
             ],
         ])->setPublic()->setMaxAge(60);
+    }
+
+    /** @return array{enabled: bool, firebase?: array<string, string>} */
+    private function push(): array
+    {
+        $firebase = [
+            'api_key' => (string) config('push.web.api_key'),
+            'app_id' => (string) config('push.web.app_id'),
+            'project_id' => (string) config('push.fcm.project_id'),
+            'messaging_sender_id' => (string) config('push.web.messaging_sender_id'),
+            'vapid_public_key' => (string) config('push.web.vapid_public_key'),
+        ];
+
+        if (! config('push.enabled') || in_array('', $firebase, true)) {
+            return ['enabled' => false];
+        }
+
+        return ['enabled' => true, 'firebase' => $firebase];
     }
 }

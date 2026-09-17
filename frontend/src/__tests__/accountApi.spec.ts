@@ -45,6 +45,15 @@ describe('API konta', () => {
     expect(sent().headers.get('Content-Type')).toBeNull();
   });
 
+  it('urządzenie push: PUT z tokenem i platformą web (replaces tylko przy zmianie tokenu), DELETE po id', async () => {
+    const { api, sent } = setup({ id: '01M2QPPNMXN47ZN3WAQ7WG23VA', platform: 'web', last_seen_at: 'x', created_at: null });
+
+    await api.registerDevice('nowy-token', 'stary-token');
+
+    expect([sent().url, sent().method]).toEqual(['/api/v1/account/devices', 'PUT']);
+    expect(JSON.parse(String(sent().body))).toEqual({ token: 'nowy-token', platform: 'web', replaces: 'stary-token' });
+  });
+
   it('powiadomienia: PATCH tylko zmienianego pola', async () => {
     const { api, sent } = setup({ push_enabled: false, push_consent_at: null, screening_reminders: false });
 

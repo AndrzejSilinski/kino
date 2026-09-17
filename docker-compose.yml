@@ -26,6 +26,10 @@ x-php-app: &php-app
     # Etap 7, blok F: limity wysyłania plików (plakaty). Tylko do odczytu.
     # Po zmianie: up -d --force-recreate tych kontenerów + restart nginx (opis w pliku).
     - ./docker/php/conf.d/uploads.ini:/usr/local/etc/php/conf.d/zz-uploads.ini:ro
+    # Etap 8, blok L: sekrety (plik konta serwisowego Firebase) z docker/secrets/, tylko do odczytu.
+    # Katalog jest w gicie z .gitignore ignorującym całą zawartość: Docker nie założy go jako root,
+    # a plik z kluczem prywatnym nie trafi do repozytorium. Ścieżka w FCM_CREDENTIALS.
+    - ./docker/secrets:/run/secrets/cinema:ro
   depends_on:
     postgres:
       condition: service_healthy

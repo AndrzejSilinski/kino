@@ -4,11 +4,12 @@
  *
  * Przełącznik zapisuje się od razu (PATCH jednego pola) i BEZ optymizmu: do odpowiedzi serwera
  * jest wyłączony, a przy błędzie wraca do stanu z serwera — tak jak blokady miejsc na planie sali.
- * Zgoda na push jest zapisana na koncie; uprawnienie tej przeglądarki (Notification.permission)
- * to osobny krok, który dochodzi razem z Firebase w bloku L.
+ * Zgoda na push jest zapisana na koncie; uprawnienie i rejestracja TEJ przeglądarki to osobny panel
+ * (BrowserPushPanel, blok L). Włączenie w przeglądarce ustawia też zgodę — stąd ponowny odczyt.
  */
 import { ref, shallowRef } from 'vue';
 import { accountApi } from '@/api/client';
+import BrowserPushPanel from '@/components/account/BrowserPushPanel.vue';
 import type { NotificationSettings } from '@/api/types';
 import { messageFor } from '@/messages';
 
@@ -75,6 +76,7 @@ void load();
       </div>
       <p v-if="saving" role="status">Zapisywanie…</p>
       <p v-if="saveError" role="alert" class="alert" data-test="settings-error">{{ saveError }}</p>
+      <BrowserPushPanel @changed="load" />
     </template>
   </section>
 </template>

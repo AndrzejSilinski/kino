@@ -35,6 +35,33 @@ final class ClientConfigApiTest extends TestCase
             ]);
     }
 
+    public function test_push_is_enabled_only_with_complete_public_firebase_config(): void
+    {
+        $web = [
+            'push.enabled' => true,
+            'push.fcm.project_id' => 'kino-test',
+            'push.web.api_key' => 'publiczny-klucz-web',
+            'push.web.app_id' => '1:1234567890:web:abcdef',
+            'push.web.messaging_sender_id' => '1234567890',
+            'push.web.vapid_public_key' => 'BPublicznyKluczVapid',
+            'push.fcm.credentials' => '/run/secrets/cinema/firebase-service-account.json',
+        ];
+        config($web);
+
+        $response = $this->getJson('/api/v1/client-config')->assertOk()
+            ->assertJsonPath('data.push', ['enabled' => true, 'firebase' => [
+                'api_key' => 'publiczny-klucz-web',
+                'app_id' => '1:1234567890:web:abcdef',
+                'project_id' => 'kino-test',
+                'messaging_sender_id' => '1234567890',
+                'vapid_public_key' => 'BPublicznyKluczVapid',
+            ]]);
+        $this->assertStringNotContainsString('firebase-service-account', (string) $response->getContent(), 'Ścieżka pliku z sekretem nie wychodzi do klienta.');
+
+        config(['push.web.vapid_public_key' => '']);
+        $this->getJson('/api/v1/client-config')->assertJsonPath('data.push', ['enabled' => false]);
+    }
+
     public function test_never_exposes_secrets(): void
     {
         // Fikcyjne klucze składane z części: pełny literał 'sk_test_…' albo 'whsec_…' w pliku

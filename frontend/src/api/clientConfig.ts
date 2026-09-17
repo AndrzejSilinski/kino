@@ -7,6 +7,14 @@
  *
  * Pełny klient HTTP (koperta data, kody błędów, 401, 429) powstaje w bloku D.
  */
+export interface FirebaseWebConfig {
+  api_key: string;
+  app_id: string;
+  project_id: string;
+  messaging_sender_id: string;
+  vapid_public_key: string;
+}
+
 export interface ClientConfig {
   api_version: string;
   realtime: {
@@ -19,8 +27,10 @@ export interface ClientConfig {
     max_seats_per_session: number;
     payment_window_seconds: number;
   };
+  /** Web Push (blok L). firebase tylko przy enabled — konfiguracja aplikacji web i klucz VAPID, wartości jawne. */
   push: {
     enabled: boolean;
+    firebase?: FirebaseWebConfig;
   };
 }
 
