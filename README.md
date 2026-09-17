@@ -15,6 +15,8 @@ bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
 | Zadania w tle | kontenery `worker` (`queue:work`) i `scheduler` (`schedule:work`) | |
 | WebSocket | Laravel Reverb (protokół Pushera) za nginx, kontener `reverb` | patrz Etap 6 |
 | Panel administracyjny | Livewire 4 + Alpine, Pico CSS, bez kroku budowania | patrz Etap 7 |
+| Aplikacja klienta (SPA) | Vue 3 + Vite + Vue Router + Pinia, TypeScript, Vitest | patrz Etap 8 |
+| Powiadomienia push | Firebase Cloud Messaging HTTP v1 (własny klient), service worker | patrz Etap 8 |
 | Płatności | Stripe (Payment Intents, `stripe/stripe-php`) | patrz Etap 4 |
 | Bilety | `endroid/qr-code` (QR), `dompdf/dompdf` (PDF) | patrz Etap 5 |
 | Poczta w środowisku deweloperskim | Mailpit | następca nierozwijanego Mailhoga |
@@ -63,13 +65,22 @@ docker compose exec php composer install
 docker compose exec php php artisan key:generate
 docker compose exec php php artisan migrate --seed
 docker compose restart worker scheduler reverb
+
+# Aplikacja klienta (Etap 8): npm w przypiętym kontenerze Node, dist/ serwuje nginx.
+sh tools/frontend/npm.sh ci --ignore-scripts
+sh tools/frontend/npm.sh run build
 ```
+
+Powiadomienia push są opcjonalne (`PUSH_ENABLED=false`); konfiguracja projektu Firebase
+i pliku konta serwisowego w `docker/secrets/` — patrz Etap 8.
 
 Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
 (wymóg „zero kroków ręcznych").
 
 | Adres | Co |
 |---|---|
+| <http://localhost:8080> | aplikacja klienta (SPA Vue), patrz Etap 8 |
+| <http://localhost:5173> | serwer deweloperski Vite: `docker compose --profile dev up -d frontend` |
 | <http://localhost:8080/api/v1> | REST API |
 | <http://localhost:8080/docs/api> | dokumentacja API (Scramble) |
 | <http://localhost:8080/admin> | panel administracyjny (administrator i obsługa kina), patrz Etap 7 |
@@ -99,9 +110,10 @@ Konta testowe (hasło `password`):
 
 ```text
 cinema/
-├── docker-compose.yml        php, worker, scheduler, reverb, nginx, postgres, redis, mailpit
+├── docker-compose.yml        php, worker, scheduler, reverb, nginx, postgres, redis, mailpit, frontend (profil dev)
 ├── docker/
-│   ├── nginx/default.conf    /app/ do Reverba, reszta poza public/ do PHP-FPM
+│   ├── nginx/default.conf    SPA z frontend/dist, prefiksy Laravela do PHP-FPM, /app/ do Reverba, CSP
+│   ├── secrets/              (Etap 8) plik konta serwisowego Firebase — poza gitem, montowany tylko do odczytu
 │   ├── php/Dockerfile        PHP 8.4-FPM Alpine: pdo_pgsql, redis, gd, intl, pcntl, zbar
 │   ├── php/conf.d/uploads.ini  (Etap 7) limity wysyłania plików PHP, podpięte jako wolumen
 │   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
@@ -112,6 +124,8 @@ cinema/
 │   │   ├── Livewire/Admin/   (Etap 7) komponenty panelu — tylko dane formularza i wywołanie serwisu
 │   │   ├── Support/          CatalogCache, ScreeningTimeline, ArticleMarkdown i inne klocki bez stanu
 │   │   ├── Payments/         port PaymentGateway i jedyny adapter znający Stripe'a
+│   │   ├── Push/             (Etap 8) klient FCM HTTP v1, token OAuth z konta serwisowego, treść powiadomień
+│   │   ├── Services/Account/ (Etap 8) profil, hasło, avatar, urządzenia push
 │   │   ├── Tickets/          podpis i obraz kodu QR, PDF, zapis PDF-ów
 │   │   ├── Http/             kontrolery (tylko HTTP), FormRequesty, zasoby JSON
 │   │   ├── Jobs/, Listeners/, Notifications/, Events/   praca w tle
@@ -125,8 +139,9 @@ cinema/
 │   └── tests/                PHPUnit na PostgreSQL (Unit, Feature)
 ├── tools/realtime-probe/     (Etap 6) sonda WebSocket: pusher-js w kontenerze Node
 ├── tools/admin-assets/       (Etap 7) pobieranie zasobów panelu: Node po digeście, npm ci
-├── tools/readme-compliance/  (Etap 7) sprawdzenie, czy nazwy z README istnieją w kodzie
-├── frontend/                 (Etap 8) Vue 3
+├── tools/readme-compliance/  (Etap 7, rozszerzony w Etapie 8) nazwy z README i tabele testów PHPUnit i Vitest kontra kod
+├── tools/frontend/npm.sh     (Etap 8) npm dla frontend/ w kontenerze Node po digeście
+├── frontend/                 (Etap 8) SPA klienta: Vue 3, Vite, Vue Router, Pinia, TypeScript, Vitest
 └── mobile/                   (Etap 9) Flutter
 ```
 
@@ -152,6 +167,8 @@ erDiagram
     screenings ||--o| screening_seat_versions : "wersja stanu miejsc"
     movies |o--o{ articles : "premiera"
     users |o--o{ articles : "autor"
+    users ||--o{ push_devices : "urządzenia push"
+    personal_access_tokens |o--o{ push_devices : "sesja"
 ```
 
 | Tabela | Rola | Najważniejsze ograniczenia |
@@ -165,9 +182,10 @@ erDiagram
 | `screening_prices` | cena per seans i kategoria (grosze) | |
 | `seat_locks` | tymczasowa blokada miejsca | **`UNIQUE (screening_id, seat_id) WHERE released_at IS NULL`** |
 | `screening_seat_versions` | licznik wersji stanu miejsc per seans (Etap 6) | klucz główny = `screening_id`, CHECK `version > 0` |
-| `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień, anulowanie (powód, kto) i rozliczenie zwrotu (`refund_requested_at`, `refund_completed_at`) | CHECK statusu i `bookings_refund_completed_after_request`, `stripe_payment_intent_id` UNIQUE, indeksy częściowe `bookings_confirmation_pending`, `bookings_refund_pending`, `bookings_paid_at` |
+| `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień (od Etapu 8 także `payment_push_sent_at`), anulowanie (powód, kto) i rozliczenie zwrotu (`refund_requested_at`, `refund_completed_at`) | CHECK statusu i `bookings_refund_completed_after_request`, `stripe_payment_intent_id` UNIQUE, indeksy częściowe `bookings_confirmation_pending`, `bookings_refund_pending`, `bookings_paid_at` |
 | `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`**, `code` UNIQUE |
-| `users` | klient, obsługa kina, administrator | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
+| `users` | klient, obsługa kina, administrator; od Etapu 8 avatar (`avatar_path`), zgoda na push (`push_consent_at`) i przypomnienia (`screening_reminders`) | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
+| `push_devices` | urządzenie z tokenem FCM (Etap 8): konto, sesja, platforma, ostatnie użycie | `public_id` i `token` UNIQUE, `personal_access_token_id` ON DELETE CASCADE, CHECK platformy |
 | `stripe_webhook_events` | dziennik przetworzonych zdarzeń Stripe'a (bez treści) | klucz główny = `event_id` |
 | `articles` | artykuł „Aktualności” / „Nadchodzące premiery” (Etap 7): typ, status, data publikacji, Markdown | `slug` UNIQUE, CHECK typu, statusu, daty publikacji i filmu premiery, indeks częściowy `articles_published` |
 
@@ -250,7 +268,7 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 - [x] Etap 5 — bilety, QR, PDF, kolejki, mail, scheduler
 - [x] Etap 6 — WebSocket (Laravel Reverb)
 - [x] Etap 7 — panel administracyjny (Livewire), cache w Redisie, moduł informacyjny
-- [ ] Etap 8 — frontend Vue 3
+- [x] Etap 8 — frontend Vue 3 (SPA), konto klienta, Web Push przez FCM
 - [ ] Etap 9 — aplikacja Flutter
 - [ ] Etap 10 — CI/CD i dokumentacja
 
@@ -2229,3 +2247,811 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
   `database` w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie), zaufane proxy
   przy TLS, niespójne wartości `age_rating` w `MovieFactory`, skrypt uruchamiający sondę
   WebSocket i skrypt zgodności README w CI.
+
+---
+
+## Etap 8 — frontend Vue 3 (SPA), konto klienta, Web Push przez FCM
+
+SPA klienta pod <http://localhost:8080> prowadzi całą ścieżkę zakupu z części 3 zadania:
+wybór kina i dnia, repertuar, interaktywny plan sali z blokadami na żywo, podsumowanie
+i płatność Stripe, wynik płatności, bilety z kodami QR i PDF, konto (historia, profil,
+hasło, avatar, powiadomienia) oraz aktualności. Backend dostał brakujące API konta,
+rezygnację z płatności, rejestr urządzeń push i wysyłkę przez Firebase Cloud Messaging
+(push po płatności i przypomnienie przed seansem).
+
+Zasada przewodnia z Etapu 7 obowiązuje także na froncie: **komponent tylko wyświetla
+i zbiera dane**. Logika blokowania, synchronizacji na żywo, płatności i push leży
+w store'ach Pinia, composables i czystych modułach bez Vue, które mają własne testy.
+**Front rozgałęzia się po `code` błędu**, nigdy po treści komunikatu ani samym statusie.
+
+### Dlaczego Vite + Vue Router, a nie Nuxt 3
+
+Zadanie dopuszcza oba. Wybór padł na **Vite + Vue Router + Pinia, TypeScript w trybie
+`strict`**:
+
+- **Nie potrzebujemy SSR.** Najcięższe ekrany (plan sali, koszyk, płatność, konto) są
+  osobiste i żywe: WebSocket, timer, token bearer, service worker. Serwer renderujący
+  HTML nie ma tu co wyrenderować — i tak wszystko przychodzi z API po zalogowaniu.
+- **SEO repertuaru nie jest wymogiem**, a gdyby był, publiczny katalog łatwiej wystawić
+  z Laravela (prerender albo osobne strony) niż prowadzić cały sklep przez warstwę SSR.
+- **Jeden artefakt: statyczny `frontend/dist`** serwowany przez ten sam nginx co API.
+  Nuxt w trybie SSR to dodatkowy proces Node w produkcji, własne cache i własne
+  zachowanie przy awarii; Nuxt w trybie SPA daje to samo co Vite, tylko z większą
+  warstwą konwencji do wytłumaczenia.
+- **Token bearer i tokeny FCM wspólne z Flutterem (Etap 9).** SPA korzysta z tego samego
+  API co aplikacja mobilna, bez osobnej ścieżki ciasteczkowej dla SSR.
+- **TypeScript**: kontrakt API (koperta `data`, pieniądze, statusy, `pending_booking`)
+  jest opisany typami w `frontend/src/api/types.ts`, a `vue-tsc` sprawdza szablony
+  w wykonawcy paczek przed testami.
+
+### Uruchomienie frontu
+
+W WSL nie ma Node — `npm` zawsze w kontenerze przypiętym po digeście
+(`tools/frontend/npm.sh`, ten sam obraz co `tools/admin-assets`), z `package-lock.json`
+w gicie i dokładnymi wersjami.
+
+```bash
+# instalacja dokładnie z package-lock.json, bez skryptów instalacyjnych zależności
+sh tools/frontend/npm.sh ci --ignore-scripts
+# tryb "jak produkcja": dist/ serwowany przez nginx pod http://localhost:8080
+sh tools/frontend/npm.sh run build
+# testy i typy
+sh tools/frontend/npm.sh test
+sh tools/frontend/npm.sh run typecheck
+```
+
+Tryb deweloperski z przeładowaniem na żywo: `docker compose --profile dev up -d frontend`
+→ <http://localhost:5173>. Serwis `frontend` jest w profilu `dev`, więc zwykłe
+`docker compose up` go nie uruchamia. Vite przekazuje `/api/`, `/storage/` i WebSocket
+`/app/` do nginx (`frontend/vite.config.ts`), więc dla przeglądarki to nadal jeden origin.
+
+| Pakiet | Wersja | Po co |
+|---|---|---|
+| `vue`, `vue-router`, `pinia` | 3.5.42, 5.3.1, 4.0.3 | SPA, trasy, stan |
+| `pusher-js` | 8.6.0 | WebSocket do Reverba (ta sama wersja co sonda z Etapu 6) |
+| `@stripe/stripe-js` | 9.16.0 | Payment Element |
+| `@firebase/app`, `@firebase/messaging` | 0.16.2, 0.13.3 | token FCM w przeglądarce |
+| `vite`, `vitest`, `@vue/test-utils`, `jsdom` | 8.3.0, 5.0.1, 2.5.1, 30.0.1 | build i testy |
+| `typescript`, `vue-tsc` | 6.0.3, 3.3.11 | typy |
+
+### Struktura `frontend/`
+
+```text
+frontend/
+├── index.html, vite.config.ts, tsconfig.json, package.json, package-lock.json
+├── public/firebase-messaging-sw.js   service worker powiadomień (bez importu Firebase)
+└── src/
+    ├── main.ts                       Pinia → klient HTTP → strażnicy → router → montaż
+    ├── api/                          klient HTTP (fetch), błędy, sesja zakupowa, typy kontraktu, endpointy
+    ├── stores/                       auth, cinema, seatMap, cart, checkout, webPush
+    ├── realtime/                     połączenie pusher-js, synchronizacja planu sali, czekanie na płatność
+    ├── payments/stripe.ts            cienka warstwa nad Stripe.js i Payment Element
+    ├── push/webPush.ts               token FCM przez @firebase/messaging (import dynamiczny)
+    ├── lib/                          czysta logika: układ i stan miejsc, kalendarz, repertuar, daty, kolejka
+    ├── composables/                  odliczanie, "najnowsza odpowiedź wygrywa", formularze API, kody QR
+    ├── router/                       trasy (leniwe widoki) i strażnicy
+    ├── components/, views/           tylko wyświetlanie i zbieranie danych
+    ├── styles/base.css               jeden arkusz, tryb jasny i ciemny, bez frameworka CSS
+    └── __tests__/                    Vitest + Vue Test Utils (jsdom)
+```
+
+Trasy SPA (`frontend/src/router/index.ts`) są po angielsku, bo w Etapie 9 te same adresy
+posłużą za deep linki aplikacji mobilnej:
+
+| Ścieżka | Ekran | Wymaga konta |
+|---|---|---|
+| `/` | wybór kina (zapamiętane kino otwiera od razu repertuar, `?change=1` pokazuje listę) | nie |
+| `/cinemas/:slug` | kalendarz i repertuar dnia | nie |
+| `/screenings/:id/seats` | plan sali i koszyk | nie |
+| `/screenings/:id/checkout` | podsumowanie i płatność | tak |
+| `/bookings/:reference/payment-result` | wynik płatności | tak |
+| `/bookings/:reference` | rezerwacja z biletami, QR i PDF | tak |
+| `/account`, `/account/profile`, `/account/notifications` | historia, profil i hasło, powiadomienia | tak |
+| `/news`, `/news/:slug` | aktualności i premiery | nie |
+| `/login`, `/register` | logowanie, rejestracja | tylko gość |
+
+### Serwowanie: jeden origin z Laravelem
+
+nginx (`docker/nginx/default.conf`) oddaje Laravelowi **wyłącznie jego prefiksy**
+(`/api`, `/admin`, `/docs`, `_scramble`, `sanctum`, skrypty Livewire, `/up`) oraz pliki
+z `backend/public` (`/vendor/`, `/js/`, `/storage/`). Każda inna ścieżka dostaje
+`index.html` z `frontend/dist` — o 404 rozstrzyga router Vue. Nowy prefiks tras Laravela
+trzeba dopisać w nginx, inaczej trafi do SPA.
+
+- **Ten sam origin = bez CORS**, bez `Access-Control-Expose-Headers` dla `X-Session-Id`
+  i `Content-Disposition`, adresy plakatów i `return_url` Stripe'a na tym samym hoście.
+- **`/assets/`** (pliki z hashem w nazwie) z cache na rok, **`index.html`** i service
+  worker z `no-cache`.
+- **Content Security Policy na dokumencie SPA** bez `'unsafe-inline'`: skrypty tylko
+  z własnego originu i Stripe'a, `connect-src` dla WebSocketu na tym samym hoście,
+  Stripe'a (`api.stripe.com`, Link) i dwóch usług Firebase
+  (`firebaseinstallations.googleapis.com`, `fcmregistrations.googleapis.com`), ramki
+  tylko Stripe'a (Payment Element, 3-D Secure). `frame-ancestors 'none'`,
+  `object-src 'none'`.
+- **Konfiguracja w czasie działania: `GET /api/v1/client-config`** (klucz publiczny
+  Reverba, limity koszyka, okno płatności, konfiguracja web Firebase). Zmienne `VITE_*`
+  zostałyby wpisane w zbudowany plik, więc jeden build nie nadałby się do innego
+  środowiska (Etap 10: jeden obraz). Endpoint zwraca tylko wartości jawne z natury —
+  pilnuje tego `ClientConfigApiTest`.
+
+### Warstwa HTTP, sesja konta i sesja zakupowa
+
+- **Jeden klient HTTP na `fetch`** (`frontend/src/api/http.ts`), bez axios: potrzebne są
+  bloby (PDF, QR), AbortController i `keepalive`, a to wszystko jest w `fetch`.
+  Klient dokleja token bearer i `X-Session-Id`, zapamiętuje identyfikator sesji
+  z nagłówka odpowiedzi i zamienia każdą porażkę na `ApiError` z polem `code`.
+  Dwa kody istnieją tylko po stronie klienta: `NETWORK_ERROR` (brak odpowiedzi)
+  i `INVALID_RESPONSE` (np. strona 502 z nginx zamiast JSON-a). 429 niesie liczbę
+  sekund z `Retry-After`, 422 — błędy pól dla `useApiForm`.
+- **Token Sanctum w `localStorage`.** Przetrwa odświeżenie i nowe karty; wylogowanie
+  albo logowanie w jednej karcie przenosi się na pozostałe zdarzeniem `storage`.
+  Ryzyko XSS ograniczają CSP bez wyjątków na skrypty inline, `v-html` tylko dla treści
+  oczyszczonej na serwerze i **termin ważności tokenu**: `SANCTUM_EXPIRATION`
+  (domyślnie 43200 minut = 30 dni), wygasłe rekordy usuwa codziennie
+  `sanctum:prune-expired` z harmonogramu. Ciasteczko HttpOnly nie chroniłoby przed XSS
+  działającym w imieniu użytkownika, a zmieniałoby decyzję 16 wspólną z Flutterem.
+- **401 `UNAUTHENTICATED` na żądaniu z tokenem** czyści sesję i prowadzi na logowanie
+  z adresem powrotu; **401 `INVALID_CREDENTIALS`** przy logowaniu nie wylogowuje.
+  Start z zapisanym tokenem bez sieci zostawia token — chwilowa awaria nie wylogowuje.
+- **`X-Session-Id` w `sessionStorage`**: każda karta ma własny koszyk, F5 zachowuje
+  blokady. Identyfikator wydaje serwer (decyzja 15); równoległe pierwsze żądania czekają
+  na jeden identyfikator, a `INVALID_SESSION_ID` kasuje zapamiętany i ponawia raz.
+- **Strażnicy tras to wygoda, nie zabezpieczenie** (dane chroni API). `?redirect=`
+  przyjmuje wyłącznie ścieżki wewnętrzne — bez open redirect.
+- **Teksty tylko po polsku, bez `vue-i18n`**: serwer zwraca komunikaty po polsku, a
+  `frontend/src/messages.ts` ma tylko teksty kodów, których serwer nie formułuje.
+- **Magazyn przeglądarki zawsze w `try/catch`** (`frontend/src/lib/storage.ts`): tryb
+  prywatny albo zablokowane ciasteczka nie kończą się białym ekranem.
+
+### Katalog: kino, kalendarz, repertuar
+
+- Wybrane kino (tylko slug) w `localStorage` — wymóg „zapamiętania wyboru”; kino
+  wycofane z oferty (404) jest zapominane.
+- Kalendarz pokazuje całe 14-dniowe okno od „dziś” w strefie kina; dni bez seansów są
+  widoczne, ale wyłączone. Repertuar dnia jako karty filmów z godzinami seansów;
+  **wyprzedany albo rozpoczęty seans jest wyszarzony i nie jest linkiem** — decydują
+  flagi z serwera, nie zegar urządzenia.
+- **Godziny wyświetlane dosłownie z ISO 8601 w strefie kina** (decyzja 24):
+  `toLocaleString()` przeliczyłby seans na strefę telefonu. Daty kalendarzowe liczone
+  w UTC, żeby zmiana czasu nie przesuwała dni.
+- **„Wygrywa najnowsza odpowiedź”** (`useLatestRequest`): szybkie kliknięcie wtorku
+  i środy przerywa poprzednie żądanie, a spóźniona odpowiedź dla wtorku jest ignorowana.
+
+### Plan sali i koszyk: blokowanie bez optymizmu
+
+```text
+kliknięcie wolnego miejsca
+  └─ miejsce "pending": wygląda jak przed kliknięciem, wskaźnik, zablokowane (aria-busy)
+       └─ kolejka szeregowa (jedno żądanie naraz, odpowiedzi w kolejności kliknięć)
+            ├─ 201  → koszyk z odpowiedzi = źródło prawdy o MOICH blokadach, sumie i czasie
+            ├─ 409 SEATS_UNAVAILABLE → miejsce "zajęte", komunikat z serwera, świeża migawka planu
+            └─ 429  → kolejne kliknięcia wstrzymane do upływu Retry-After
+```
+
+- **Plan na siatce CSS z prawdziwymi `<button>`** (`SeatMap`), a nie SVG czy canvas:
+  fokus, klawiatura, `disabled` i `aria-*` za darmo. Miejsce podwójne na kratkach
+  `x` i `x+1` (decyzja 149), przejścia to puste kratki, ekran u góry, legenda.
+  Stany rozróżnia kolor **oraz** znak i obramowanie; etykieta dla czytnika ekranu podaje
+  rząd, numer, typ, stan, kategorię i cenę z serwera. Na telefonie plan przewija się we
+  własnym kontenerze z przyciskami powiększenia.
+- **Dwa źródła prawdy, celowo rozdzielone** (`frontend/src/lib/seatState.ts`): status
+  z planu i ze zdarzeń WebSocket jest absolutny, ale nie mówi, czyja jest blokada
+  (decyzja 26). Własne blokady pochodzą **wyłącznie z odpowiedzi koszyka**. Zdarzenie
+  `held` dla klikniętego miejsca może przyjść przed odpowiedzią 201 — nie maluje go wtedy
+  jako cudzego.
+- **Ta sama milisekunda**: dwóch klientów klika to samo miejsce, rozstrzyga indeks UNIQUE
+  w PostgreSQL (Etap 2). Jeden widzi „wybrane”, drugi komunikat i „zajęte”. Na żywo
+  sprawdzone 20 równoległymi sesjami (niżej, weryfikacja).
+- **Odkliknięcie i „Wyczyść wybór” zwracają 200 z koszykiem** zamiast 204 — klient i tak
+  potrzebuje nowej sumy i czasu, a drugie żądanie zjadałoby limit 30/min na sesję.
+- **Brak zwalniania koszyka przy zamknięciu karty.** `navigator.sendBeacon` nie ustawia
+  `X-Session-Id`, a `fetch` z `keepalive` w `pagehide` odpaliłby się też przy F5
+  i zwolnił miejsca klientowi, który tylko odświeżył stronę. Porzucony koszyk zwalnia
+  TTL blokad.
+
+### Timer
+
+`useCountdown` liczy od `expires_in_seconds` z odpowiedzi i chwili jej odebrania na zegarze
+**monotonicznym** (`performance.now`), a nie od zegara ściennego urządzenia. Każdy takt
+liczy czas od nowa, więc opóźniony `setInterval` nie kumuluje błędu; po powrocie karty
+z tła (`visibilitychange`) koszyk jest pobierany od nowa. Koszyk wygasa razem z
+**najwcześniejszą** blokadą (serwer nie wydłuża starszych), więc po zerze pobieramy resztę
+koszyka zamiast czyścić cały wybór. `CountdownTimer` jest widoczny stale, a czytnik ekranu
+ogłasza tylko progi, nie każdą sekundę. Po checkoucie timer przechodzi na okno płatności
+rezerwacji.
+
+### Plan sali na żywo: reconnect i wersje
+
+`frontend/src/realtime/seatSync.ts` to czysty moduł bez Vue i bez sieci, z testami
+jednostkowymi, realizujący algorytm z decyzji 125:
+
+1. migawka REST (`GET /api/v1/screenings/{screening}/seat-map`, wersja V),
+2. subskrypcja `private-screenings.{id}`,
+3. po `pusher:subscription_succeeded` **ponowna migawka** — zmiany z okna między krokiem 1
+   a 2 nie przyszły zdarzeniem. Po zerwaniu połączenia pusher-js subskrybuje ponownie
+   i krok 3 wykonuje się znowu.
+
+Zdarzenie `seats.changed` z wersją ≤ znanej jest pomijane, z wersją znana+1 nakładane,
+a luka w numeracji albo `seats.resync` wymusza migawkę. Kolejne żądania migawki w trakcie
+trwającej łączą się w jedno powtórzenie; migawka starsza niż stan ze zdarzeń nie cofa planu.
+
+- **`pusher-js` bez `laravel-echo`**: potrzebne są niskopoziomowe zdarzenia
+  (`pusher:subscription_succeeded`, `pusher:subscription_error`, zmiany stanu połączenia).
+  Panel ma Echo, bo wymaga go Livewire; SPA nie ma tego wymogu.
+- **Jedno połączenie na aplikację**, host i port z adresu strony (nginx przekazuje `/app/`
+  do Reverba), podpis kanału przez `POST /api/v1/broadcasting/auth` z tokenem i sesją
+  zakupową. Wyjście z widoku wypisuje z kanału.
+- **Bez odpytywania planu sali** (decyzja 210): przy braku połączenia `RealtimeBanner`
+  mówi, że plan może być nieaktualny, i daje przycisk odświeżenia. Kliknięcie i tak idzie
+  do serwera, więc nieaktualny plan nie sprzeda zajętego miejsca — najwyżej pokaże 409.
+
+### Podsumowanie i płatność
+
+```text
+plan sali ── "Przejdź do podsumowania" ──► checkout (koszyk, suma, timer blokad)
+   ▲                                          │ "Przejdź do płatności": POST /screenings/{id}/booking
+   │                                          ▼
+   │                          Payment Element (client_secret z odpowiedzi, timer okna płatności)
+   │  "Zrezygnuj z płatności"                 │ stripe.confirmPayment(redirect: if_required)
+   └── DELETE /bookings/{ref}/payment         ▼
+                                  /bookings/{ref}/payment-result
+                                  czeka na status z serwera: kanał private-bookings.{ref}
+                                  + odczyt GET /bookings/{ref} z rosnącymi odstępami i limitem prób
+                                              ▼
+                                  "Płatność przyjęta" → bilety, QR, PDF
+```
+
+- **Stan ekranu wynika ze stanu serwera, nie z historii kliknięć.** Koszyk dostał pole
+  `pending_booking` (reference, expires_at i expires_in_seconds albo `null`): po
+  checkoucie blokady należą do rezerwacji, serwer ich nie zwalnia, więc plan sali jest
+  **zamrożony**, a F5, powrót z logowania i druga karta lądują w tym samym miejscu.
+  Checkout jest idempotentny (powtórzony zwraca tę samą płatność), więc store `checkout`
+  trzyma wynik tylko w pamięci.
+- **Rezygnacja z płatności: `DELETE /api/v1/bookings/{booking}/payment`** — tylko
+  właściciel (`BookingPolicy::abandonPayment`), tylko rezerwacja `pending`
+  (inaczej `BOOKING_NOT_PAYABLE`), powtórzona jest idempotentna.
+  `PaymentService::abandonPayment` najpierw anuluje rezerwację i zwalnia miejsca w bazie,
+  potem anuluje PaymentIntent u operatora (kolejność jak przy wygaszaniu). Awaria
+  operatora nie zmienia odpowiedzi: miejsca są już zwolnione, a płatność potwierdzona
+  w tej samej chwili trafi w webhooku na anulowaną rezerwację — autoryzacja karty zostanie
+  anulowana, a BLIK zwrócony. Bez tego porzucona płatność trzymałaby miejsca do końca
+  okna płatności.
+- **Błędy checkoutu po `code`**: `EMPTY_CART` (blokady wygasły — powrót do planu),
+  `BOOKING_ALREADY_PENDING` (dobrane miejsca w trakcie płatności — przycisk zwolnienia
+  dobranych), `BOOKING_NOT_PAYABLE`, `PAYMENT_PROVIDER_UNAVAILABLE` (ponowienie tego samego
+  żądania), `SCREENING_NOT_BOOKABLE`.
+- **Payment Element** (`PaymentForm`, `frontend/src/payments/stripe.ts`): dane karty wpisuje
+  się w ramkach z domeny Stripe'a (zakres PCI SAQ A), ten sam element pokazuje metody
+  włączone na koncie (karta, BLIK, Link) i sam prowadzi 3-D Secure. `locale: 'pl'`,
+  motyw jasny albo ciemny z preferencji systemu. Import `@stripe/stripe-js/pure`
+  dynamicznie: skrypt z `js.stripe.com` ładuje się tylko na ekranie płatności.
+  `redirect: 'if_required'` — karta i BLIK kończą się bez opuszczania strony.
+- **O opłaceniu rozstrzyga webhook** (decyzja 72), nie przeglądarka. Wynik
+  `requires_capture`, `succeeded` albo `processing` ze Stripe.js oznacza tylko, że klient
+  skończył swoją część. `frontend/src/realtime/bookingWatch.ts` subskrybuje kanał
+  `private-bookings.{reference}` **przed** pierwszym odczytem i czyta ponownie po
+  subskrypcji; zapasowo odpytuje `GET /api/v1/bookings/{booking}` z rosnącymi odstępami
+  (2 s … 30 s) i limitem prób, po którym pokazuje „opóźnienie”, zostawiając subskrypcję.
+  Odpytywanie jest tu dopuszczalne, bo dotyczy jednego zasobu jednego klienta przez kilka
+  minut, a zdarzenie może nie wyjść (bezpiecznik przy niedziałającym Reverbie).
+- **`client_secret` nie zostaje w adresie ani w historii.** Parametry dopisywane przez
+  Stripe'a do `return_url` usuwa globalny strażnik trasy jeszcze przed wejściem na ekran;
+  zostaje tylko `redirect_status`, używany wyłącznie do lepszego komunikatu.
+
+### Bilety i historia
+
+- **Kody QR i PDF tylko z tokenem bearer** (decyzja 78): `<img src>` ani `<a href>` nie
+  wyślą nagłówka `Authorization`. `useTicketQrs` pobiera PNG przez `fetch`, pokazuje przez
+  adres obiektu (`blob:` dozwolony w CSP) i zwalnia go `revokeObjectURL` przy zmianie listy
+  i wyjściu z ekranu. PDF: blob → ukryty link z atrybutem `download` i nazwą
+  z `Content-Disposition` (także `filename*`).
+- **`qr_url` z serwera to pełny adres z `APP_URL`**; `apiPathFromUrl` przyjmuje go tylko
+  z naszego originu i prefiksu API. Adres z innego hosta albo portu jest odrzucany bez
+  wysyłania żądania — token trafiłby do obcego serwera.
+- Bilety pokazujemy tylko dla rezerwacji opłaconej (serwer i tak odpowiada 409
+  `BOOKING_TICKETS_UNAVAILABLE`). Historia w `/account` ze stronicowaniem w adresie
+  i odnośnikiem do biletów albo do stanu płatności.
+
+### Konto klienta (backend i ekrany)
+
+Nowe trasy w grupie /api/v1/account (wymagają tokenu; odczyt profilu to nadal
+`GET /api/v1/auth/me`):
+
+| Metoda i ścieżka | Co robi | Limit |
+|---|---|---|
+| `PATCH /api/v1/account/profile` | imię i nazwisko (e-maila i roli nie da się zmienić) | `account` |
+| `PUT /api/v1/account/password` | zmiana hasła z obecnym hasłem; odpowiedź z `revoked_tokens` | `account` + `password-change` |
+| `POST /api/v1/account/avatar` | avatar JPG/PNG do 5 MB → kwadratowy JPEG | `account` |
+| `DELETE /api/v1/account/avatar` | usunięcie avatara (idempotentne) | `account` |
+| `GET /api/v1/account/notifications` | `push_enabled`, `push_consent_at`, `screening_reminders` | — |
+| `PATCH /api/v1/account/notifications` | zmiana jednego albo obu przełączników | `account` |
+| `PUT /api/v1/account/devices` | rejestracja albo odświeżenie tokenu FCM (`replaces`), idempotentne | `account` |
+| `DELETE /api/v1/account/devices/{device}` | wyrejestrowanie po `public_id`; cudze → 404 | `account` |
+
+- **Limity per użytkownik**, nie per IP: `account` 30/min, `password-change` 5 prób
+  na 10 minut — pole `current_password` jest wyrocznią hasła dla posiadacza skradzionego
+  tokenu.
+- **Zmiana hasła wylogowuje pozostałe sesje** (usuwa ich tokeny, a przez kaskadę także
+  ich urządzenia push); bieżąca sesja zostaje. Nowe hasło musi spełniać politykę
+  i różnić się od obecnego.
+- **E-maila nie da się zmienić w profilu** — wymagałoby potwierdzenia nowego adresu,
+  a e-mail jest loginem (ograniczenie niżej).
+- **Avatar** (`AvatarService`, `AvatarImageProcessor`): wymiary z nagłówka sprawdzane
+  przed dekodowaniem (bomba pikselowa odpada przed alokacją), przekodowanie GD do JPEG
+  256 × 256 z wycięciem środka — **bez EXIF**, czyli bez współrzędnych GPS ze zdjęcia
+  z telefonu. Minimum 128 × 128 px. Plik zapisywany przed transakcją pod **nową losową
+  nazwą** `avatars/{40 znaków hex}.jpg`, stary usuwany po COMMIT (jak plakat, decyzje
+  150–151). Błędy obrazu: `AVATAR_INVALID` z `context.reason`.
+- **Ustawienia w `users`**: `push_consent_at` (chwila zgody, NULL = brak) i
+  `screening_reminders` (domyślnie `true` — przypomnienia e-mail działały od Etapu 5 dla
+  wszystkich). **Przypomnienie respektuje zgodę w chwili wysyłki**: rezerwacji klienta
+  z wyłączonymi przypomnieniami `cinema:screenings:send-reminders` nie zajmuje, więc kto
+  włączy je przed oknem, dostanie przypomnienie normalnie.
+- **Ekrany**: każda sekcja profilu to osobny formularz (`useApiForm`) — błąd hasła nie
+  czyści zmienionego imienia. Przełączniki powiadomień zapisują się od razu i **bez
+  optymizmu**, jak blokady miejsc: do odpowiedzi są wyłączone, przy błędzie wracają
+  do stanu z serwera. Wstępne sprawdzenie pliku avatara w przeglądarce to tylko wygoda.
+
+### Web Push przez Firebase Cloud Messaging
+
+```text
+przeglądarka (panel "Ta przeglądarka", po kliknięciu)
+  ├─ Notification.requestPermission()
+  ├─ @firebase/messaging: subskrypcja push kluczem VAPID → token FCM
+  ├─ PATCH /account/notifications {push_enabled: true}     zgoda na koncie
+  └─ PUT /account/devices {token, platform: web, replaces?} urządzenie na serwerze
+
+BookingPaid (capture w webhooku) ── SendPaymentPush ── PaymentConfirmedPush ─┐
+cinema:screenings:send-reminders ── ScreeningReminder (mail + push) ─────────┤ kolejka Redis
+                                                                             ▼
+                                   PushChannel → FcmPushSender → FCM HTTP v1 → usługa push przeglądarki
+                                                                             ▼
+                                   firebase-messaging-sw.js: powiadomienie, kliknięcie → /bookings/{ref}
+```
+
+**Backend** (`backend/app/Push/`, `PushChannel`, `SendPaymentPush`):
+
+- **Własny klient FCM HTTP v1 i własny podpis JWT RS256**, bez `google/auth`:
+  `GoogleAccessTokenProvider` składa JWT z konta serwisowego (roszczenia iss, scope, aud,
+  iat, exp), podpisuje kluczem prywatnym i wymienia na token OAuth. Token w **pamięci
+  procesu** workera (nie w Redisie — to sekret ważny godzinę), odnawiany minutę przed
+  końcem ważności albo po 401 z FCM (jedna ponowna próba). `ServiceAccountCredentials`
+  czyta z pliku tylko trzy pola, a klucz ukrywa przed zrzutami (`__debugInfo`).
+  `token_uri` spoza Google jest odrzucany.
+- **Mapowanie błędów FCM** (`FcmPushSender`): `UNREGISTERED` i `SENDER_ID_MISMATCH` →
+  urządzenie usuwane; `INVALID_ARGUMENT` → usuwane **tylko**, gdy błąd dotyczy tokenu
+  (ten sam kod oznacza też błąd treści); 429, 5xx i brak sieci → do ponowienia.
+  `webpush.fcm_options.link` tylko dla adresu HTTPS — na `http://localhost` kliknięcie
+  obsługuje nasz service worker z `data.url`.
+- **`PushChannel`** sprawdza zgodę i urządzenia **w chwili wysyłki z kolejki**. Wyjątek
+  (ponowienie całego powiadomienia) tylko wtedy, gdy nikt nie dostał wiadomości,
+  a przynajmniej jedno urządzenie odmówiło chwilowo; częściowy sukces to ostrzeżenie
+  w logu, bo ponowienie zdublowałoby powiadomienie. W logach `public_id` urządzenia i kod
+  błędu — nigdy token ani treść.
+- **Push po płatności: osobne powiadomienie `PaymentConfirmedPush`**, a nie drugi kanał
+  `BookingConfirmed` — mail czeka na PDF (decyzja 54), push ma przyjść od razu po capture.
+  `SendPaymentPush` zajmuje `bookings.payment_push_sent_at` warunkowym UPDATE:
+  **najwyżej raz**, także przy powtórzonym `BookingPaid`. Znacznik ustawia się również
+  wtedy, gdy klient nie ma zgody albo urządzeń — zgoda wyrażona później nie może wywołać
+  spóźnionego „płatność przyjęta”. Znacznik oznacza więc zajęcie wysyłki, a nie doręczenie.
+- **Przypomnienie**: `ScreeningReminder` dostaje kanał push przy `PUSH_ENABLED=true` i zgodzie
+  klienta. Laravel kolejkuje każdy kanał osobno, więc awaria FCM nie opóźnia maila;
+  rezerwacja jest zajmowana raz dla obu kanałów (at-most-once, decyzja 89).
+- **Treść bez danych osobowych**, bo widać ją na zablokowanym ekranie
+  (`BookingPushContent`): tytuł („Płatność przyjęta”, „Przypomnienie o seansie”), film
+  i godzina w strefie kina, w danych typ i ścieżka `/bookings/{reference}`.
+- **Rejestr urządzeń `push_devices`**, wspólny dla weba i Fluttera (Etap 9): token
+  **unikalny globalnie** (ten sam token na innym koncie przechodzi na nowe konto zamiast
+  wysyłać powiadomienia dwóm osobom), na zewnątrz `public_id` (ULID), limit
+  `PUSH_MAX_DEVICES_PER_USER` z usuwaniem najdawniej widzianych. **`personal_access_token_id`
+  z ON DELETE CASCADE**: urządzenie żyje tak długo, jak sesja — wylogowanie, zmiana hasła
+  i `sanctum:prune-expired` usuwają je w bazie, nawet gdy przeglądarka nie zdąży.
+- **Bez `PUSH_ENABLED=true` kanał push nie jest wybierany**, a PHPUnit nigdy nie łączy się
+  z Google: testy podstawiają `FakePushSender` i atrapę `AccessTokenSource`, a
+  `backend/phpunit.xml` zeruje zmienne push z `backend/.env` (pułapka CC).
+
+**Przeglądarka** (`frontend/src/stores/webPush.ts`, `frontend/src/push/webPush.ts`,
+`BrowserPushPanel`):
+
+- **Trzy różne rzeczy**: zgoda na koncie (wspólna dla urządzeń), uprawnienie przeglądarki
+  (zna je tylko to urządzenie) i urządzenie zarejestrowane na serwerze. Push dostaje
+  urządzenie, które ma wszystkie trzy; przycisk „Włącz powiadomienia w tej przeglądarce”
+  ustawia je naraz. **Prośba o uprawnienie tylko po kliknięciu** (przeglądarki blokują ją
+  bez gestu), zablokowane uprawnienie daje instrukcję zamiast przycisku.
+- **`@firebase/app` i `@firebase/messaging` zamiast zbiorczego pakietu**, importowane
+  dynamicznie na ekranie powiadomień. W `localStorage` zapamiętujemy identyfikator
+  i token urządzenia; nowy token od FCM przy starcie aplikacji rejestruje się z `replaces`.
+  Po wylogowaniu front zapomina urządzenie i usuwa token FCM, a serwer usuwa wiersz
+  kaskadą.
+- **Własny service worker bez importu Firebase** (`frontend/public/firebase-messaging-sw.js`):
+  zawsze pokazuje powiadomienie (wymóg `userVisibleOnly`), tag = typ + adres, więc kolejne
+  o tej samej rezerwacji zastępuje poprzednie; kliknięcie przenosi na otwartą kartę z tym
+  adresem albo otwiera nową. Przyjmuje tylko ścieżki wewnętrzne — inne zamienia na `/account`.
+- **Konfiguracja web Firebase i klucz VAPID przychodzą z `client-config`** i tylko wtedy,
+  gdy są kompletne; inaczej klient widzi push jako wyłączony.
+
+#### Konfiguracja projektu Firebase (jednorazowo, w konsoli Firebase)
+
+Push jest opcjonalny: bez tych kroków aplikacja działa, a panel powiadomień w przeglądarce
+pokazuje, że push jest wyłączony w tej instalacji.
+
+1. W konsoli Firebase utwórz projekt (Analytics niepotrzebne).
+2. **Ustawienia projektu → Ogólne → Twoje aplikacje → aplikacja web.** Z konfiguracji
+   przepisz do `backend/.env`: `FCM_PROJECT_ID` (projectId), `FIREBASE_WEB_API_KEY`
+   (apiKey), `FIREBASE_WEB_APP_ID` (appId), `FIREBASE_MESSAGING_SENDER_ID`
+   (messagingSenderId). To wartości jawne — i tak trafiają do przeglądarki.
+3. **Ustawienia projektu → Cloud Messaging → Certyfikaty Web Push → wygeneruj parę kluczy.**
+   Klucz publiczny wpisz do `FIREBASE_VAPID_PUBLIC_KEY`.
+4. **Ustawienia projektu → Konta usługi → wygeneruj nowy klucz prywatny.** Pobrany plik
+   JSON to **sekret**: zapisz go jako docker/secrets/firebase-service-account.json
+   (katalog ma `.gitignore` ignorujący całą zawartość) i nadaj prawa odczytu dla
+   kontenerów: chmod 644. Kontenery widzą katalog tylko do odczytu jako
+   `/run/secrets/cinema`, więc w `.env`:
+   `FCM_CREDENTIALS=/run/secrets/cinema/firebase-service-account.json`.
+5. `PUSH_ENABLED=true`, potem odtworzenie kontenerów z nowym wolumenem i restart nginx
+   (pułapka BJ): `docker compose up -d --force-recreate php worker scheduler reverb`
+   i `docker compose restart nginx`.
+6. Sprawdzenie: `GET /api/v1/client-config` zwraca `push.enabled` równe true z kompletem pól
+   `push.firebase`, a w aplikacji **Konto → Powiadomienia → Włącz powiadomienia w tej
+   przeglądarce** zapisuje urządzenie.
+
+Plik konta serwisowego nigdy nie trafia do gita ani do raportów; skaner sekretów wykonawcy
+paczek szuka w wyjściach nagłówka klucza prywatnego i pola klucza z pliku JSON.
+
+### Aktualności i premiery
+
+`/news` (filtr rodzaju i numer strony w adresie) i `/news/:slug` korzystają z publicznego
+`GET /api/v1/articles` z Etapu 7. Treść `body_html` jest oczyszczana na serwerze
+(decyzja 183) i wstawiana przez **`v-html` wyłącznie w `ArticleView`** — drugą warstwą jest
+CSP bez skryptów inline. Test `vHtmlGuard.spec.ts` czyta źródła wszystkich komponentów
+i nie przechodzi, gdy `v-html` pojawi się gdzie indziej (ani na pustej liście plików).
+Obrazy i tabele z Markdown nie poszerzają strony na telefonie.
+
+### Nowe i zmienione endpointy, kody błędów, konfiguracja
+
+| Endpoint | Zmiana |
+|---|---|
+| `GET /api/v1/client-config` | nowy: konfiguracja klienta w czasie działania (publiczny cache 60 s) |
+| `GET /api/v1/screenings/{screening}/seat-locks` (i POST, DELETE) | koszyk z polem `pending_booking` |
+| `DELETE /api/v1/screenings/{screening}/seat-locks/{seat}`, `DELETE /api/v1/screenings/{screening}/seat-locks` | 200 z koszykiem zamiast 204 |
+| `DELETE /api/v1/bookings/{booking}/payment` | nowy: rezygnacja z rozpoczętej płatności |
+| /api/v1/account/… | nowe: profil, hasło, avatar, powiadomienia, urządzenia push (tabela wyżej) |
+| `GET /api/v1/auth/me` i odpowiedzi logowania | użytkownik z `avatar_url` |
+
+| Kod | Status | Kiedy |
+|---|---|---|
+| `AVATAR_INVALID` | 422 (503 przy błędzie zapisu) | obraz nieczytelny, zły typ, za mały, za dużo pikseli; `context.reason` |
+| `NETWORK_ERROR` | — (tylko klient) | żądanie nie dotarło albo nie wróciła odpowiedź |
+| `INVALID_RESPONSE` | — (tylko klient) | odpowiedź bez kształtu kontraktu |
+
+| Zmienna | Znaczenie |
+|---|---|
+| `SANCTUM_EXPIRATION` | ważność tokenu API w minutach (domyślnie 30 dni) |
+| `PUSH_ENABLED` | włącza kanał push (domyślnie `false`) |
+| `FCM_PROJECT_ID`, `FCM_CREDENTIALS`, `FCM_TIMEOUT_SECONDS` | projekt Firebase, ścieżka do pliku konta serwisowego w kontenerze, timeout |
+| `FIREBASE_WEB_API_KEY`, `FIREBASE_WEB_APP_ID`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_VAPID_PUBLIC_KEY` | jawna konfiguracja aplikacji web i klucz VAPID |
+| `PUSH_MAX_DEVICES_PER_USER` | limit urządzeń na konto (domyślnie 20) |
+| `FRONTEND_UID`, `FRONTEND_GID` | użytkownik serwisu `frontend` w profilu `dev` (domyślnie 1000) |
+
+Nowe kolumny i tabela: `users.avatar_path`, `users.push_consent_at`,
+`users.screening_reminders`, `bookings.payment_push_sent_at` i `push_devices`
+(`public_id` UNIQUE, `token` UNIQUE, `personal_access_token_id` z kaskadą, CHECK platformy
+`web` / `android` / `ios`).
+
+### Etap 8 — decyzje projektowe (187–251)
+
+**Architektura i serwowanie**
+
+187. **Vite + Vue Router + Pinia, nie Nuxt 3** — SPA bez SSR, uzasadnienie wyżej.
+188. **TypeScript w trybie `strict`**, typy kontraktu API w jednym pliku, `vue-tsc` przed testami.
+189. **Store'y Pinia tylko dla stanu współdzielonego między ekranami** (`auth`, `cinema`,
+     `seatMap`, `cart`, `checkout`, `webPush`); algorytmy w czystych modułach bez Vue
+     (`lib/`, `realtime/`), stan formularzy lokalnie w komponentach i composables.
+190. **Node wyłącznie w kontenerze po digeście** (`tools/frontend/npm.sh`), `npm ci`
+     z lockfile, `--ignore-scripts`, wersje przypięte dokładnie, npm audit jako strażnik
+     w wykonawcy paczek.
+191. **SPA na tym samym originie co API**: nginx serwuje `frontend/dist`, Laravel dostaje
+     tylko swoje prefiksy, fallback historii na `index.html`. Bez CORS.
+192. **Serwer Vite tylko w profilu `dev`** i z proxy `/api/`, `/storage/`, `/app/` do nginx —
+     także w trybie deweloperskim jeden origin.
+193. **Konfiguracja w czasie działania z `GET /api/v1/client-config`** zamiast `VITE_*`:
+     jeden build dla każdego środowiska, tylko wartości jawne.
+194. **CSP na dokumencie SPA bez `'unsafe-inline'`**, wyjątki tylko dla Stripe'a i dwóch usług
+     Firebase; `/assets/` z cache na rok, `index.html` i service worker bez cache.
+195. **Końce linii LF w całym repozytorium** (`.gitattributes`) — CRLF psuje skrypty,
+     heredoki i sumy SHA256 paczek.
+
+**HTTP, sesja, trasy**
+
+196. **Własny klient na `fetch` zamiast axios** — bloby, AbortController, `keepalive` bez
+     zależności; wszystkie porażki jako `ApiError` z `code`.
+197. **Kody tylko klienta: `NETWORK_ERROR` i `INVALID_RESPONSE`** — front rozgałęzia się po
+     `code` także wtedy, gdy odpowiedź nie przyszła z Laravela.
+198. **Token Sanctum w `localStorage`** z synchronizacją kart zdarzeniem `storage`; ochrona
+     przed XSS przez CSP, jedno miejsce `v-html` i termin ważności tokenu.
+199. **Tokeny API wygasają po 30 dniach** (`SANCTUM_EXPIRATION`), wygasłe rekordy sprząta
+     codziennie `sanctum:prune-expired`.
+200. **Wylogowanie tylko przy 401 `UNAUTHENTICATED` na żądaniu z tokenem**; nieudane
+     logowanie i brak sieci przy starcie nie czyszczą sesji.
+201. **`X-Session-Id` w `sessionStorage`** (koszyk per karta); pierwsze równoległe żądania
+     czekają na jeden identyfikator, `INVALID_SESSION_ID` → zapomnienie i jedno ponowienie.
+202. **Strażnicy tras jako wygoda**, `?redirect=` tylko do ścieżek wewnętrznych.
+203. **Jeden język bez `vue-i18n`** — komunikaty z serwera, w kliencie tylko teksty kodów
+     klienta i limitu żądań.
+204. **Magazyn przeglądarki zawsze w `try/catch`** — aplikacja działa bez `localStorage`.
+
+**Katalog**
+
+205. **Wybór kina zapamiętany jako sam slug**; dane kina zawsze z API.
+206. **Godziny seansów dosłownie z ISO 8601** (decyzja 24 po stronie klienta), daty
+     kalendarzowe w UTC.
+207. **„Wygrywa najnowsza odpowiedź”** (`useLatestRequest`) dla kalendarza i repertuaru.
+
+**Plan sali, koszyk, WebSocket**
+
+208. **Plan sali na siatce CSS z `<button>`**, nie SVG ani canvas; stany rozróżnialne nie tylko
+     kolorem, bez wzorca ARIA `grid` (obiecuje nawigację strzałkami, której nie ma).
+209. **Blokowanie bez optymizmu z kolejką szeregową**: miejsce „pending” do odpowiedzi,
+     odpowiedzi w kolejności kliknięć, własne blokady wyłącznie z odpowiedzi koszyka.
+210. **Plan sali bez odpytywania**: przy braku WebSocketu baner i ręczne odświeżenie,
+     migawka automatycznie po powrocie połączenia.
+211. **Timer z `expires_in_seconds` na zegarze monotonicznym**, ponowny odczyt koszyka po
+     powrocie karty z tła; po wygaśnięciu najwcześniejszej blokady — odczyt reszty koszyka.
+212. **Zwolnienie miejsca i całego koszyka zwraca 200 z koszykiem** zamiast 204 (limit 30/min).
+213. **Koszyk nie jest zwalniany przy zamknięciu karty** — F5 nie może oddać miejsc; porzucony
+     koszyk zwalnia TTL.
+214. **`pusher-js` bez `laravel-echo`** w SPA — potrzebne zdarzenia protokołu i stany połączenia.
+215. **Synchronizacja planu jako czysty moduł `seatSync`** z algorytmem z decyzji 125 i jednym
+     połączeniem WebSocket na aplikację.
+
+**Płatność i bilety**
+
+216. **`pending_booking` w odpowiedzi koszyka** — o rozpoczętej płatności mówi serwer, plan sali
+     jest zamrożony, a F5 i druga karta wracają do płatności.
+217. **Rezygnacja z płatności `DELETE /api/v1/bookings/{booking}/payment`** — tylko właściciel
+     i tylko `pending`; najpierw baza, potem operator, idempotentna.
+218. **Stan checkoutu tylko w pamięci** — checkout jest idempotentny, więc powtórzenie żądania
+     odtwarza płatność.
+219. **Payment Element ładowany dynamicznie z `@stripe/stripe-js/pure`**, `locale: 'pl'`,
+     `redirect: 'if_required'`.
+220. **Ekran wyniku czeka na status z serwera**: kanał `private-bookings.{reference}`
+     subskrybowany przed odczytem oraz odczyt z rosnącymi odstępami i limitem prób.
+221. **Parametry powrotu ze Stripe'a (z `client_secret`) usuwane z adresu przed wejściem
+     na ekran**; `redirect_status` tylko do komunikatu.
+222. **QR i PDF przez `fetch` z tokenem → blob → adres obiektu** ze zwalnianiem;
+     `apiPathFromUrl` odrzuca adresy spoza naszego originu i API.
+
+**Konto**
+
+223. **E-mail poza edycją profilu** (login; zmiana wymagałaby potwierdzenia adresu).
+224. **Zmiana hasła wylogowuje pozostałe sesje i ich urządzenia**, bieżąca zostaje;
+     osobny limit `password-change`.
+225. **Avatar przekodowany GD do JPEG 256 × 256 bez metadanych**, wymiary sprawdzane przed
+     dekodowaniem.
+226. **Avatar pod publicznym adresem z losową nazwą** (160 bitów), nowa nazwa przy każdej
+     zmianie, stary plik po COMMIT.
+227. **Ustawienia powiadomień w `users`**: `push_consent_at` jako chwila zgody,
+     `screening_reminders` domyślnie `true`.
+228. **Zgoda na przypomnienia sprawdzana w chwili wysyłki** — rezerwacja bez zgody nie jest
+     zajmowana.
+229. **Limity konta per użytkownik** (`account`), nie per IP.
+230. **Przełączniki powiadomień bez optymizmu**, każda sekcja profilu jako osobny formularz.
+
+**Web Push**
+
+231. **Własny klient FCM HTTP v1 i własny podpis JWT RS256** zamiast `google/auth`.
+232. **Token dostępu Google w pamięci procesu**, odnawiany przed wygaśnięciem i po 401.
+233. **`push_devices` wspólne dla weba i Fluttera**: token unikalny globalnie, `public_id`
+     na zewnątrz, limit urządzeń na konto.
+234. **Urządzenie związane z tokenem Sanctum przez ON DELETE CASCADE**.
+235. **`PUT /api/v1/account/devices` idempotentne, odświeżenie tokenu przez `replaces`**.
+236. **Mapowanie błędów FCM na trzy wyniki**: nieważny token (usunięcie), chwilowy błąd
+     (ponowienie), inny błąd (ostrzeżenie).
+237. **Kanał ponawia tylko wtedy, gdy nikt nie dostał powiadomienia**.
+238. **Push po płatności jako osobne powiadomienie, najwyżej raz** (`payment_push_sent_at`
+     zajmowane także bez zgody i urządzeń).
+239. **Przypomnienie push jako drugi kanał `ScreeningReminder`** z tą samą gwarancją
+     at-most-once.
+240. **Treść powiadomień bez danych osobowych**: film i godzina w strefie kina.
+241. **Push domyślnie wyłączony, testy bez połączeń z Google** (`FakePushSender`,
+     zmienne zerowane w `backend/phpunit.xml`).
+242. **`webpush.fcm_options.link` tylko dla HTTPS**, na HTTP kliknięcie obsługuje service worker.
+243. **Plik konta serwisowego w `docker/secrets/`** (ignorowany przez git), montowany tylko do
+     odczytu; w `.env` wyłącznie ścieżka.
+244. **`@firebase/app` i `@firebase/messaging` zamiast pakietu zbiorczego**, import dynamiczny.
+245. **Własny service worker bez importu Firebase**, wyłącznie ścieżki wewnętrzne.
+246. **Trzy warunki push w przeglądarce** (zgoda, uprawnienie, urządzenie), uprawnienie tylko
+     po geście użytkownika.
+247. **Konfiguracja web Firebase w `client-config` tylko w komplecie**.
+248. **Wylogowanie zapomina urządzenie i token FCM w przeglądarce**, a serwer usuwa wiersz
+     kaskadą — działa także przy zamkniętej karcie.
+
+**Aktualności, testy, weryfikacja**
+
+249. **Aktualności w SPA, `v-html` wyłącznie w `ArticleView`**, pilnowane testem źródeł.
+250. **Testy frontu w wykonawcy paczek z oczekiwaną liczbą** (`npm ci`, audit, typecheck,
+     Vitest, build) przed testami PHP i commitem.
+251. **Weryfikacja na żywo skryptami z licznikiem porażek** — wyścig, wygaśnięcie blokady
+     (czas cofany w bazie zamiast czekania) i konto przez nginx; stan po teście w przeglądarce
+     sprawdzany w bazie i w Stripe.
+
+### Etap 8 — pułapki, na które trafiliśmy (BT–CD)
+
+- **BT. Kolumna siatki CSS rośnie do szerokości zawartości.** Element siatki ma
+  `min-width: auto`, więc kolumna z planem sali (`max-content`) poszerzała na telefonie całą
+  stronę zamiast przewijać plan. Rozwiązanie: `minmax(0, 1fr)` w `.seat-selection-layout`.
+- **BU. docker compose exec bez `-T` czyta standardowe wejście.** Wywołany w pętli
+  while read zjada jej dane. Wykonawca paczek uruchamia blok z wejściem z `/dev/null`.
+- **BV. Klucz Sec-WebSocket-Key musi mieć dokładnie 16 bajtów w base64.** Z innym Reverb
+  zamyka połączenie bez odpowiedzi: klient widzi timeout, nginx loguje 499 — wygląda to
+  jak awaria proxy, a jest błędem testu.
+- **BW. Wycofanie bloku z nowym katalogiem.** Po usunięciu nowego `.gitignore` pliki, które
+  ignorował (`node_modules`, `dist`), stają się nieśledzone. Wycofanie usuwa cały nowy
+  katalog od korzenia nieobecnego w HEAD.
+- **BX. Atrapy sekretów w testach zatrzymują skaner.** Dosłowny ciąg w kształcie klucza
+  Stripe'a albo `client_secret` w pliku testu wygląda dla skanera jak wyciek — atrapy są
+  składane z części, a smoke raportuje tylko „tak/nie”.
+- **BY. config:show wyrównuje kolumny spacjami na końcu wiersza.** Porównanie całej linii
+  zawodzi; wartość bierzemy jako ostatnie pole.
+- **BZ. Rozpoznanie przy zatrzymanych kontenerach.** Wszystkie odczyty wracają puste,
+  a porównania „puste = puste” wyglądają na zgodne. Skrypty rozpoznania i weryfikacji
+  najpierw sprawdzają, czy usługi działają.
+- **CA. Cudzysłów, `$`, odwrotny apostrof albo ukośnik wsteczny w opisie commitu** rozbija
+  manifest.sh, który wykonawca źródłuje w bashu. Generator paczek odrzuca te znaki
+  i sprawdza manifest, czytając go tak jak wykonawca.
+- **CB. grep -c liczy także komentarze.** Test dymny szukający słowa, które stoi
+  w komentarzu pliku, przechodzi fałszywie — szukamy wywołania z nawiasem.
+- **CC. `phpunit.xml` nie nadpisuje zmiennych, których w nim nie ma.** Po włączeniu push
+  w `backend/.env` testy dostały prawdziwą konfigurację Firebase i dokładne porównanie
+  `client-config` nie przeszło. Zmienne push są teraz jawnie zerowane w `phpunit.xml`.
+- **CD. Worker zapisuje w logu nazwę klasy powiadomienia, a nie zadania.** Zadanie
+  powiadomienia z kolejki widać w logu jako `App\Notifications\ScreeningReminder`
+  (RUNNING/DONE); pierwszy skrypt weryfikacji szukał ogólnej nazwy zadania Laravela
+  i zgłosił fałszywy FAIL.
+
+### Etap 8 — testy
+
+**PHPUnit** (nowe i zmienione klasy):
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `ClientConfigApiTest` | 4 | klucz Reverba i limity z konfiguracji, push tylko przy kompletnej konfiguracji web, żadnych sekretów, publiczny cache poza sesją zakupową |
+| `TokenExpirationTest` | 3 | domyślnie 30 dni, token działa przed terminem i jest odrzucany po nim, codzienne sprzątanie w harmonogramie |
+| `SeatLockReleaseResponseTest` | 2 | zwolnienie miejsca zwraca resztę koszyka, zwolnienie całego — pusty koszyk bez timera |
+| `CheckoutApiTest` | 3 | powtórzony checkout to ta sama płatność, `pending_booking` dopiero po checkoucie, dobrane miejsce blokuje checkout i tylko ono jest zwalniane |
+| `AbandonPaymentApiTest` | 5 | rezygnacja zwalnia miejsca i anuluje PaymentIntent, idempotencja bez drugiego wołania operatora, awaria operatora nie cofa zwolnienia, opłacona bez zmian, tylko właściciel |
+| `AccountProfileApiTest` | 5 | `avatar_url` w profilu, przycinanie imienia, e-mail i rola niezmienne, polskie komunikaty, 401 bez tokenu |
+| `ChangePasswordApiTest` | 4 | wylogowanie pozostałych sesji z zachowaniem bieżącej, złe obecne hasło, polityka i różne hasło, limit prób |
+| `AvatarApiTest` | 8 | kwadratowy JPEG 256 pod losową nazwą, stary plik usuwany, idempotentne usunięcie, za mały obraz, fałszywe rozszerzenie, inny typ, za duży plik, bomba pikselowa przed dekodowaniem |
+| `NotificationSettingsApiTest` | 4 | wartości domyślne, chwila zgody niezmieniana przy ponownym włączeniu, niezależne przełączniki, 422 dla pustego i złego typu |
+| `SendScreeningRemindersCommandTest` | 5 | (+1) klient z wyłączonymi przypomnieniami ich nie dostaje, a rezerwacja nie jest zajmowana |
+| `PushDeviceApiTest` | 7 | idempotentna rejestracja bez tokenu w odpowiedzi, `replaces`, przeniesienie tokenu na nowe konto, kaskada przy wylogowaniu, cudze urządzenie 404, walidacja, limit urządzeń |
+| `GoogleAccessTokenProviderTest` | 5 | JWT RS256 z poprawnym podpisem, token z pamięci do minuty przed wygaśnięciem, odmowa bez ujawniania klucza, walidacja pliku i ukryty klucz, obcy `token_uri` |
+| `FcmPushSenderTest` | 10 | kształt wiadomości i `data` jako tekst, link tylko dla HTTPS, mapowanie kodów błędów FCM (przypadki z data providera), 401 z odnowieniem i jedną ponowną próbą, brak projektu |
+| `PushNotificationsTest` | 7 | push po płatności bez danych osobowych i najwyżej raz, brak zgody lub wyłączony push, przypomnienie mailem i pushem, usuwanie nieważnych tokenów, ponowienie tylko przy zerze doręczeń, nieopłacona bez pushu |
+| Etapy 1–7 | 416 | bez zmian w kontraktach poza opisanymi wyżej |
+| **Razem** | **488** | |
+
+**Vitest + Vue Test Utils** (jsdom, `frontend/src/__tests__/`):
+
+| Plik | Liczba | Obszar |
+|---|---:|---|
+| `http.spec.ts` | 15 | koperta, token, 204, 422, 401 z tokenem i przy logowaniu, `Retry-After`, brak sieci, strona 502, przerwanie, sesja zakupowa, `INVALID_SESSION_ID`, pliki i `filename*` |
+| `bookingSession.spec.ts` | 3 | format identyfikatora, pamięć karty bez magazynu, magazyn rzucający wyjątkiem |
+| `clientConfig.spec.ts` | 3 | koperta, błąd HTTP, brak klucza Reverba |
+| `messages.spec.ts` | 2 | teksty limitu i braku sieci, komunikat serwera dla pozostałych |
+| `authStore.spec.ts` | 5 | logowanie, wylogowanie bez sieci, 401 przy starcie, start bez sieci, wylogowanie w innej karcie |
+| `guards.spec.ts` | 4 | gość na koncie, zalogowany na logowaniu, utrata sesji, open redirect |
+| `router.spec.ts` | 7 | trasy, wymóg konta, usuwanie parametrów Stripe'a, format ULID, podstrony konta, artykuły, 404 |
+| `homeRoute.spec.ts` | 1 | zapamiętane kino i zmiana kina |
+| `LoginView.spec.ts` | 3 | błędy pól, `INVALID_CREDENTIALS`, przekierowanie i blokada przycisku |
+| `NotFoundView.spec.ts` | 1 | strona 404 |
+| `cinemaStore.spec.ts` | 2 | zapamiętanie wyboru, zły slug i kino wycofane |
+| `datetime.spec.ts` | 4 | godzina dosłownie z ISO, dni przez zmianę czasu, polskie etykiety, poprawne daty |
+| `calendar.spec.ts` | 3 | 14 dni, dłuższe okno, wybór dnia z adresu |
+| `repertoire.spec.ts` | 2 | grupowanie po filmach, stan seansu |
+| `ScreeningCalendar.spec.ts` | 1 | dni wyłączone i `aria-pressed` |
+| `MovieScreenings.spec.ts` | 2 | wyprzedany seans nie jest linkiem, zaślepka plakatu |
+| `RepertoireView.spec.ts` | 3 | dzień z adresu i strefa kina, spóźniona odpowiedź, kino wycofane |
+| `seatLayout.spec.ts` | 2 | miejsce podwójne, przejścia, miejsca poza salą |
+| `seatState.spec.ts` | 3 | zdarzenie przed odpowiedzią, własna blokada z migawki, etykieta dla czytnika |
+| `serialQueue.spec.ts` | 1 | kolejność i błąd bez zatrzymania kolejki |
+| `useCountdown.spec.ts` | 2 | zegar monotoniczny, jedno `onExpire` na termin |
+| `cartStore.spec.ts` | 11 | pending, zdarzenie przed 201, ta sama milisekunda (409), podwójne kliknięcie, szeregowość, odkliknięcie, limit miejsc, 429, wygaśnięcie, wyczyszczenie |
+| `SeatMap.spec.ts` | 2 | rzędy jako grupy, miejsce podwójne, stany nie tylko kolorem, `aria-busy` |
+| `CartPanel.spec.ts` | 2 | pozycje i suma z serwera, pusty koszyk |
+| `ScreeningSeatsView.spec.ts` | 2 | koszyk po potwierdzeniu, alert przy 409 |
+| `connection.spec.ts` | 3 | host i transport, podpis kanału z sesją zakupową, odmowa 403 |
+| `seatSync.spec.ts` | 9 | kolejność migawka → subskrypcja → migawka, wersje, luka i resync, inny seans, łączenie migawek, reconnect, odmowa kanału, `stop()`, wyjątek w migawce |
+| `seatMapRealtime.spec.ts` | 3 | stan absolutny i wersja, starsza migawka nie cofa, zwolnione własne miejsce |
+| `RealtimeBanner.spec.ts` | 1 | stan na żywo i offline z ręcznym odświeżeniem |
+| `ScreeningSeatsRealtime.spec.ts` | 1 | blokada innego klienta natychmiast, wypisanie z kanału przy wyjściu |
+| `cartPendingPayment.spec.ts` | 4 | zamrożenie planu, zwolnienie dobranych, powrót po opłaceniu, po rezygnacji |
+| `checkoutStore.spec.ts` | 11 | wynik i termin, podwójne kliknięcie, pięć kodów błędów, brak sieci, rezygnacja i jej porażka, koniec okna |
+| `bookingsApi.spec.ts` | 6 | checkout 201 i 200, szczegóły, QR tylko z naszego originu, PDF, rezygnacja |
+| `CheckoutView.spec.ts` | 7 | klucz i `client_secret` dla formularza, podsumowanie, F5 w trakcie płatności, pusty koszyk, dobrane miejsce, 503, rezygnacja |
+| `ScreeningSeatsCheckout.spec.ts` | 3 | przejście do checkoutu, zamrożony plan, rezygnacja z planu sali |
+| `PaymentForm.spec.ts` | 5 | gotowość formularza, potwierdzenie z `return_url`, odrzucona karta, brak Stripe.js, blokada z zewnątrz |
+| `stripeOutcome.spec.ts` | 5 | statusy rozstrzygane przez webhook, komunikaty tylko dla błędów klienta, przerwane 3-D Secure |
+| `bookingWatch.spec.ts` | 4 | subskrypcja przed odczytem, zdarzenie → odczyt, odpytywanie z limitem, błędy i sprzątanie |
+| `PaymentResultView.spec.ts` | 5 | zdarzenie kończy czekanie, nieudane przekierowanie, `expired`, `cancelled`, cudza rezerwacja |
+| `apiPath.spec.ts` | 6 | ścieżka z naszego originu i pięć przypadków odrzucenia |
+| `useTicketQrs.spec.ts` | 3 | tylko bilety z kodem, błąd jednego obrazu, zwalnianie adresów obiektów |
+| `BookingView.spec.ts` | 5 | bilety z QR, PDF z nazwą, 429, nieopłacona bez żądań, cudza rezerwacja |
+| `accountApi.spec.ts` | 5 | profil, hasło, avatar multipart, urządzenie push, powiadomienia |
+| `avatarFile.spec.ts` | 2 | poprawne pliki, zły typ i rozmiar |
+| `AccountBookingsView.spec.ts` | 3 | lista, stronicowanie w adresie, pusta historia |
+| `AccountProfileView.spec.ts` | 4 | imię w sesji, avatar i jego błędy, zmiana hasła |
+| `AccountNotificationsView.spec.ts` | 2 | zapis bez optymizmu, błąd przywraca stan z serwera |
+| `webPushStore.spec.ts` | 10 | cztery stany wyjściowe, włączenie po kliknięciu, odmowa uprawnienia, nowy token z `replaces`, start bez ładowania Firebase, wyłączenie, zapomnienie przy wylogowaniu |
+| `BrowserPushPanel.spec.ts` | 2 | włączenie z przycisku, zablokowane uprawnienie |
+| `serviceWorker.spec.ts` | 7 | powiadomienie z tagiem, cztery złośliwe adresy, zawsze widoczne powiadomienie, kliknięcie |
+| `articlesApi.spec.ts` | 2 | lista bez pustego `type`, premiery i artykuł |
+| `ArticlesView.spec.ts` | 4 | lista i filtr w adresie, nieznany rodzaj, treść HTML, 404 |
+| `vHtmlGuard.spec.ts` | 2 | niepusta lista komponentów, `v-html` tylko w dozwolonym |
+| **Razem Vitest** | **210** | |
+
+Testy frontu nie łączą się z siecią: Stripe, pusher-js, Firebase i service worker są za
+interfejsami (`PaymentUi`, `RealtimeConnection`, `WebPushClient`) podstawianymi w testach.
+
+### Etap 8 — weryfikacja na żywo
+
+Na docelowym środowisku Docker Compose, Stripe w trybie testowym przy działającym
+`stripe listen`, push z prawdziwym projektem Firebase. Skrypty weryfikacji leżą poza
+repozytorium (jak sonda z Etapu 6) i piszą raporty z licznikiem porażek.
+
+- **Skrypt N1 (przez nginx, bez przeglądarki): 42 sprawdzenia, 0 porażek.**
+  - SPA i głęboki link, CSP z domenami Stripe'a i Firebase, service worker z `no-cache`,
+    kompletna konfiguracja push w `client-config`;
+  - **wyścig: 20 sesji otwiera połączenia TCP i za wspólną barierą blokuje to samo miejsce —
+    dokładnie jedno 201 i 19 × 409 `SEATS_UNAVAILABLE`, zero 5xx i 429**, jedna aktywna
+    blokada w bazie, na planie `held` dla innych i `held_by_you` dla zwycięzcy;
+  - wygaśnięcie: czas blokady cofnięty w bazie, `cinema:seat-locks:sweep` zwalnia miejsce,
+    wersja stanu rośnie, przegrana sesja może je zająć;
+  - konto testowe: profil, zgoda na push, dwa urządzenia na fikcyjnych tokenach, zmiana
+    hasła (druga sesja i jej urządzenie znikają, stare hasło 401), avatar (JPEG 256 × 256,
+    podmiana usuwa stary plik, fałszywy PNG 422, usunięcie), wylogowanie usuwa urządzenie;
+    konto usuwane na końcu, raport bez tokenów i identyfikatorów sesji.
+- **Przeglądarka + skrypt kontrolny N2 (stan w bazie i w Stripe): 0 porażek.**
+  - płatność kartą i kartą z 3-D Secure (najpierw odrzucone uwierzytelnienie, potem
+    potwierdzone): w Stripe pełna kwota pobrana, bilety wystawione, webhooki
+    `payment_intent.amount_capturable_updated` i `payment_intent.succeeded`;
+  - push po płatności: zadanie `PaymentConfirmedPush` wykonane w workerze, próbne
+    powiadomienie przyjęte przez FCM i wyświetlone;
+  - **przypomnienie**: zakup najpóźniej 120 minut przed seansem odtworzony cofnięciem
+    `paid_at` jednej rezerwacji testowej, `cinema:screenings:send-reminders` → dwa zadania
+    (mail i push) bez błędów, e-mail w Mailpit, powiadomienie na ekranie z filmem
+    i godziną, bez imienia;
+  - karta odrzucona: `card_declined`, nic nie pobrano; porzucona płatność po oknie:
+    rezerwacja `expired`, PaymentIntent `canceled`;
+  - wylogowanie usuwa urządzenie push konta.
+- **Wcześniej, przy blokach G i H3**: dwie przeglądarki na tym samym seansie widzą swoje
+  blokady na żywo bez odświeżania (blok G); płatność BLIK i powrót na ekran wyniku (blok H3,
+  lista kontrolna). Te dwa scenariusze nie mają raportu ze skryptu kontrolnego N2.
+- **Po każdym bloku** testy dymne przez nginx i wykonawca paczek: `npm ci`, npm audit
+  (strażnik dla zależności produkcyjnych), typecheck, Vitest z oczekiwaną liczbą, build,
+  pełny zestaw PHPUnit, skan sekretów w raportach i zmianach.
+
+### Etap 8 — znane ograniczenia i co dalej
+
+- **Brak zmiany e-maila** — wymaga potwierdzenia nowego adresu i powiadomienia starego.
+- **Avatar pod publicznym, losowym adresem**: kto dostanie adres, zobaczy obraz, dopóki
+  klient go nie zmieni. Alternatywą jest endpoint z autoryzacją i `fetch` + blob przy
+  każdym wyświetleniu.
+- **Token w `localStorage`** jest dostępny dla skryptu działającego na stronie; ochroną
+  są CSP, brak `v-html` poza artykułami i termin ważności tokenu.
+- **Plik konta serwisowego z prawami 644 w środowisku deweloperskim** — kontenery
+  działają jako inny użytkownik niż WSL. W produkcji: menedżer sekretów albo
+  sekrety Dockera z właścicielem procesu.
+- **Wolumen z sekretami trafia do wszystkich kontenerów z kotwicy aplikacji** (także
+  Reverba, który go nie potrzebuje) — do rozdzielenia przy wieloetapowym obrazie (Etap 10).
+- **Znacznik push po płatności nie mówi o doręczeniu**; FCM nie potwierdza wyświetlenia
+  powiadomienia bez dodatkowej telemetrii.
+- **Web Push działa na `localhost` i HTTPS**; na innym hoście po HTTP przeglądarka nie da
+  subskrypcji (TLS w Etapie 10), a link z FCM (`fcm_options.link`) działa dopiero na HTTPS.
+- **Brak testów e2e w repozytorium** (Playwright): scenariusze z dwiema przeglądarkami
+  i płatnością są sprawdzane skryptami i listą kontrolną — do CI w Etapie 10.
+- **Przypomnienie wychodzi tylko przy zakupie przed oknem** (Etap 5); zakup na mniej niż
+  120 minut przed seansem nie dostaje przypomnienia ani mailem, ani pushem.
+- **Powiadomienie o odwołaniu seansu przez kino** ma dziś tylko mail; kanał push i deep
+  linki dojdą z aplikacją Flutter (Etap 9) na tym samym rejestrze urządzeń.

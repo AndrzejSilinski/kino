@@ -17,12 +17,21 @@ declare(strict_types=1);
  *
  * Wynik: lista BRAK, liczniki i EXIT. Strażnik pułapki AW: kod 0 wymaga ZERO braków,
  * zgodnej tabeli testów i niepustego wyniku (co najmniej MIN_CHECKED sprawdzonych nazw).
+ *
+ * Etap 8, blok O: także nazwy z frontu (frontend/src, frontend/public, package.json, konfiguracja
+ * Vite i TypeScript), komponenty Vue i eksporty TypeScript jako "klasy", pliki po samej nazwie
+ * (np. vHtmlGuard.spec.ts) oraz tabela testów Vitest porównywana z raportem JSON, który zapisuje
+ * wykonawca paczek (frontend/node_modules/.cache/etap8/vitest.json). Brak raportu = BRAK.
  */
 
 const MIN_CHECKED = 100;
+const VITEST_REPORT = 'frontend/node_modules/.cache/etap8/vitest.json';
 const SEARCH_DIRS = ['backend/app', 'backend/config', 'backend/database', 'backend/routes', 'backend/resources',
-    'backend/tests', 'backend/bootstrap', 'backend/public/js', 'backend/public/vendor/admin', 'docker', 'tools'];
-const SEARCH_FILES = ['docker-compose.yml', 'backend/.env.example', 'backend/phpunit.xml', 'backend/composer.json'];
+    'backend/tests', 'backend/bootstrap', 'backend/public/js', 'backend/public/vendor/admin', 'docker', 'tools',
+    'frontend/src', 'frontend/public'];
+const SEARCH_FILES = ['docker-compose.yml', 'backend/.env.example', 'backend/phpunit.xml', 'backend/composer.json',
+    'frontend/package.json', 'frontend/vite.config.ts', 'frontend/tsconfig.json', 'frontend/index.html', '.gitattributes',
+    'docker/secrets/.gitignore'];
 
 $heading = $argv[1] ?? 'Etap 7';
 $readme = (string) @file_get_contents('README.md');
@@ -48,11 +57,12 @@ foreach (SEARCH_DIRS as $dir) {
     foreach ($it as $file) {
         $path = $file->getPathname();
         // Bez samego sprawdzacza (jego komentarze zawierają przykładowe nazwy) i bez zależności.
-        if (str_starts_with($path, 'tools/readme-compliance/')
-            || (preg_match('#/(vendor|node_modules)/#', $path) === 1 && ! str_starts_with($path, 'backend/public/vendor/admin'))) {
+        // docker/secrets/: pliki z sekretami (konto serwisowe Firebase) nie są czytane nawet do pamięci.
+        if (str_starts_with($path, 'tools/readme-compliance/') || str_starts_with($path, 'docker/secrets/')
+            || (preg_match('#/(vendor|node_modules|dist)/#', $path) === 1 && ! str_starts_with($path, 'backend/public/vendor/admin'))) {
             continue;
         }
-        if ($file->isFile() && $file->getSize() < 2_000_000 && preg_match('/\.(php|js|json|ini|conf|sh|yml|yaml|xml|md|txt)$|SHA256SUMS$/', $path) === 1) {
+        if ($file->isFile() && $file->getSize() < 2_000_000 && preg_match('/\.(php|js|mjs|ts|vue|css|html|json|ini|conf|sh|yml|yaml|xml|md|txt)$|SHA256SUMS$|\.gitignore$/', $path) === 1) {
             $corpus[$path] = (string) file_get_contents($path);
         }
     }
@@ -72,6 +82,11 @@ $anywhereWord = static function (string $needle) use ($corpus): bool {
 $classFile = static function (string $class) use ($corpus): ?string {
     foreach ($corpus as $path => $text) {
         if (str_ends_with($path, '.php') && preg_match('/^(?:final |abstract |readonly )*(?:class|enum|trait|interface) '.preg_quote($class, '/').'\b/m', $text) === 1) {
+            return $path;
+        }
+        // Etap 8: komponent Vue (plik o tej nazwie) albo eksport TypeScript (klasa, interfejs, typ).
+        if ((str_ends_with($path, '.vue') && basename($path, '.vue') === $class)
+            || (str_ends_with($path, '.ts') && preg_match('/^export (?:default )?(?:abstract )?(?:class|interface|type|enum) '.preg_quote($class, '/').'\b/m', $text) === 1)) {
             return $path;
         }
     }
@@ -114,9 +129,36 @@ if (preg_match_all('/^\| `([A-Za-z0-9]+Test)` \| (\d+) \|/m', $section, $rows, P
         $pass('test', "{$class} = {$count}", $actual === (int) $count, "PHPUnit zbiera {$actual}");
     }
 }
+// Etap 8: tabela Vitest "| `plik.spec.ts` | N |" i wiersz "Razem Vitest" kontra raport JSON wykonawcy.
+if (preg_match_all('/^\| `([A-Za-z0-9]+\.spec\.ts)` \| (\d+) \|/m', $section, $specRows, PREG_SET_ORDER) > 0) {
+    $vitest = json_decode((string) @file_get_contents(VITEST_REPORT), true);
+    $specCounts = [];
+    foreach ((is_array($vitest) ? $vitest['testResults'] ?? [] : []) as $result) {
+        $specCounts[basename((string) $result['name'])] = count($result['assertionResults'] ?? []);
+    }
+    $pass('vitest', 'raport '.VITEST_REPORT, $specCounts !== [], 'uruchom testy frontu przed sprawdzeniem');
+    $specTotal = 0;
+    foreach ($specRows as [, $file, $count]) {
+        $specTotal += (int) $count;
+        $pass('vitest', "{$file} = {$count}", ($specCounts[$file] ?? -1) === (int) $count, 'Vitest zbiera '.($specCounts[$file] ?? 0));
+    }
+    $unlisted = array_diff(array_keys($specCounts), array_column($specRows, 1));
+    $pass('vitest', 'wszystkie pliki testów w tabeli', $unlisted === [], 'brak w tabeli: '.implode(', ', $unlisted));
+    if (preg_match('/^\| \*\*Razem Vitest\*\* \| \*\*(\d+)\*\* \|/m', $section, $vsum) === 1) {
+        $all = is_array($vitest) ? (int) ($vitest['numTotalTests'] ?? -1) : -1;
+        $pass('vitest', 'Razem Vitest = '.$vsum[1], (int) $vsum[1] === $all && $specTotal === $all, "Vitest zbiera {$all}, tabela sumuje {$specTotal}");
+    }
+}
 if (preg_match('/^\| Etapy 1–\d+ \| (\d+) \|/mu', $section, $rest) === 1 && preg_match('/^\| \*\*Razem\*\* \| \*\*(\d+)\*\* \|/m', $section, $sum) === 1) {
     $all = array_sum($testCounts);
     $pass('test', 'Razem = '.$sum[1], (int) $sum[1] === $all && $tableTotal + (int) $rest[1] === $all, "PHPUnit zbiera {$all}, tabela sumuje ".($tableTotal + (int) $rest[1]));
+}
+
+// Etap 8: ścieżki tras SPA z routera Vue bez wyrażeń regularnych parametrów
+// ('/screenings/:id(\\d+)/seats' -> '/screenings/:id/seats').
+$spaPaths = [];
+if (preg_match_all("/path: '([^']+)'/", $corpus['frontend/src/router/index.ts'] ?? '', $spa) > 0) {
+    $spaPaths = array_map(static fn (string $path): string => (string) preg_replace('/\((?:[^()]|\([^()]*\))*\)/', '', $path), $spa[1]);
 }
 
 // 5. Nazwy w backtickach.
@@ -128,6 +170,18 @@ foreach (array_unique($tokens[1]) as $token) {
         continue;
     }
     $seen[$token] = true;
+
+    if (str_starts_with($token, '/') && str_contains($token, '/:')) {
+        $pass('trasa SPA', $token, in_array($token, $spaPaths, true));
+        continue;
+    }
+
+    // Etap 8: sama nazwa pliku z repozytorium (np. vHtmlGuard.spec.ts, package.json).
+    if (preg_match('#^[\w.-]+\.[a-z]{2,4}$#', $token) === 1
+        && array_filter(array_keys($corpus), static fn (string $path): bool => basename($path) === $token) !== []) {
+        $pass('plik', $token, true);
+        continue;
+    }
 
     if (preg_match('/^(GET|POST|PUT|PATCH|DELETE) (\/\S+)$/', $token, $r) === 1 || preg_match('/^(\/(?:api\/v1|admin)\S*)$/', $token, $r) === 1) {
         $uri = preg_replace('/\?.*$/', '', end($r));
@@ -162,7 +216,9 @@ foreach (array_unique($tokens[1]) as $token) {
     } else {
         // Pozostałe fragmenty (nazwy indeksów, kolumn, kanałów, opcji): dosłownie w kodzie,
         // a nazwy z samych znaków słowa — jako całe słowo.
-        $pass('fragment', $token, preg_match('/^[A-Za-z0-9_]+$/', $token) === 1 ? $anywhereWord($token) : $anywhere($token));
+        // Etap 8: także nazwa pliku z repozytorium (np. vHtmlGuard.spec.ts).
+        $pass('fragment', $token, (preg_match('/^[A-Za-z0-9_]+$/', $token) === 1 ? $anywhereWord($token) : $anywhere($token))
+            || array_filter(array_keys($corpus), static fn (string $path): bool => basename($path) === $token) !== []);
     }
 }
 
