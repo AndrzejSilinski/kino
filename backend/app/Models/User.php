@@ -71,6 +71,12 @@ class User extends Authenticatable
      * Kino, w którym pracuje obsługa. Dla klienta i administratora null —
      * pilnuje tego constraint users_staff_has_cinema w bazie.
      */
+    /** Urządzenia z tokenami FCM (Etap 8, blok K). */
+    public function pushDevices(): HasMany
+    {
+        return $this->hasMany(PushDevice::class);
+    }
+
     public function cinema(): BelongsTo
     {
         return $this->belongsTo(Cinema::class);

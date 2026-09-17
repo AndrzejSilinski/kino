@@ -7,6 +7,10 @@ namespace App\Notifications;
 use App\Enums\BookingStatus;
 use App\Enums\ScreeningStatus;
 use App\Models\Booking;
+use App\Models\User;
+use App\Notifications\Channels\PushChannel;
+use App\Push\BookingPushContent;
+use App\Push\PushMessage;
 use App\Queue\UsesRetryPolicy;
 use App\Tickets\BookingTicketsPresenter;
 use Illuminate\Bus\Queueable;
@@ -26,8 +30,9 @@ use Illuminate\Notifications\Notification;
  * anulowana, seans odwołany albo już rozpoczęty, zanim zadanie doczekało
  * się workera.
  *
- * Kanał 'mail' teraz; push (FCM) dojdzie w Etapie 8 jako drugi kanał,
- * kolejkowany osobno.
+ * Kanały: 'mail' zawsze, push (Etap 8, blok K) przy włączonym FCM i zgodzie klienta.
+ * Laravel kolejkuje każdy kanał jako osobne zadanie, więc awaria FCM nie opóźnia maila
+ * i odwrotnie. Rezerwacja jest "zajęta" raz dla obu kanałów (at-most-once, decyzja 89).
  */
 final class ScreeningReminder extends Notification implements ShouldQueue
 {
@@ -42,7 +47,16 @@ final class ScreeningReminder extends Notification implements ShouldQueue
     /** @return list<string> */
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        $pushAllowed = config('push.enabled') && $notifiable instanceof User && $notifiable->wantsPush();
+
+        return $pushAllowed ? ['mail', PushChannel::class] : ['mail'];
+    }
+
+    public function toPush(object $notifiable): PushMessage
+    {
+        $booking = Booking::query()->with(['screening.movie', 'screening.hall.cinema'])->findOrFail($this->bookingId);
+
+        return BookingPushContent::screeningReminder($booking);
     }
 
     public function shouldSend(object $notifiable, string $channel): bool

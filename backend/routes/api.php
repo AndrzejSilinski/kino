@@ -13,6 +13,7 @@ use App\Http\Controllers\Api\V1\CinemaController;
 use App\Http\Controllers\Api\V1\ClientConfigController;
 use App\Http\Controllers\Api\V1\MovieController;
 use App\Http\Controllers\Api\V1\NotificationSettingsController;
+use App\Http\Controllers\Api\V1\PushDeviceController;
 use App\Http\Controllers\Api\V1\ScreeningController;
 use App\Http\Controllers\Api\V1\SeatLockController;
 use App\Http\Controllers\Api\V1\SeatMapController;
@@ -87,6 +88,12 @@ Route::middleware('auth:sanctum')
             Route::post('/avatar', [AccountAvatarController::class, 'store'])->name('avatar.store');
             Route::delete('/avatar', [AccountAvatarController::class, 'destroy'])->name('avatar.destroy');
             Route::patch('/notifications', [NotificationSettingsController::class, 'update'])->name('notifications.update');
+
+            // Urządzenia push (Etap 8, blok K): PUT = rejestracja albo odświeżenie tokenu (idempotentne).
+            Route::put('/devices', [PushDeviceController::class, 'store'])->name('devices.store');
+            Route::delete('/devices/{device}', [PushDeviceController::class, 'destroy'])
+                ->where('device', '[0-9A-Z]{26}')
+                ->name('devices.destroy');
         });
     });
 
