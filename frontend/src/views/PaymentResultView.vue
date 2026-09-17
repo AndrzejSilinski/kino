@@ -83,7 +83,8 @@ const screening = computed(() => booking.value?.screening ?? null);
       <div aria-live="polite" class="stack" data-test="payment-result">
         <template v-if="booking.status === 'paid'">
           <h1>Płatność przyjęta</h1>
-          <p>Bilety są gotowe. Potwierdzenie z biletami w PDF wyślemy na adres e-mail Twojego konta.</p>
+          <p>Bilety są gotowe. Potwierdzenie z biletami w PDF wyślemy też na adres e-mail Twojego konta.</p>
+          <p><RouterLink class="button-link" :to="{ name: 'booking', params: { reference: booking.reference } }" data-test="show-tickets">Zobacz bilety</RouterLink></p>
         </template>
         <template v-else-if="booking.status === 'pending'">
           <h1>{{ redirectFailed ? 'Płatność nie została potwierdzona' : 'Czekamy na potwierdzenie płatności' }}</h1>

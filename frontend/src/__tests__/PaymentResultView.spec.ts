@@ -48,6 +48,7 @@ describe('ekran wyniku płatności', () => {
 
     expect(wrapper.get('h1').text()).toBe('Płatność przyjęta');
     expect(wrapper.get('[data-test="booking-status"]').text()).toBe('Opłacona');
+    expect(wrapper.get('[data-test="show-tickets"]').attributes('href')).toBe(`/bookings/${REFERENCE}`);
     expect(wrapper.text()).toContain('Barbie');
   });
 

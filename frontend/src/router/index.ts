@@ -41,6 +41,13 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Podsumowanie i płatność', requiresAuth: true },
   },
   {
+    // Szczegóły rezerwacji z kodami QR i PDF (blok H4); adres deep linku aplikacji mobilnej (Etap 9).
+    path: '/bookings/:reference([0-9A-Z]{26})',
+    name: 'booking',
+    component: () => import('@/views/BookingView.vue'),
+    meta: { title: 'Rezerwacja', requiresAuth: true },
+  },
+  {
     // Wynik płatności (blok H3): return_url Stripe'a i cel po potwierdzeniu w formularzu.
     path: '/bookings/:reference([0-9A-Z]{26})/payment-result',
     name: 'payment-result',

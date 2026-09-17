@@ -193,6 +193,22 @@ export interface Cart {
 
 export type BookingStatus = 'pending' | 'paid' | 'cancelled' | 'expired' | 'refunded';
 
+export type TicketStatus = 'valid' | 'used' | 'cancelled';
+
+/**
+ * TicketResource (blok H4). Bez kodu biletu (decyzja 60): kod działa jak przepustka, więc klient dostaje
+ * tylko qr_url — adres obrazu generowanego na serwerze, chroniony tokenem i BookingPolicy.
+ */
+export interface Ticket {
+  id: number;
+  price: Money;
+  status: TicketStatus;
+  status_label: string;
+  validated_at: string | null;
+  qr_url: string | null;
+  seat?: { id: number; row: string; number: number; label: string; type: SeatType };
+}
+
 /** BookingResource. screening i tickets tylko tam, gdzie serwer je ładuje (szczegóły, lista). */
 export interface Booking {
   reference: string;
@@ -205,6 +221,7 @@ export interface Booking {
   expires_at: string | null;
   cancellation?: { cancelled_at: string | null; refund: 'none' | 'pending' | 'refunded' };
   screening?: Omit<ScreeningDetails, 'prices'>;
+  tickets?: Ticket[];
 }
 
 /**

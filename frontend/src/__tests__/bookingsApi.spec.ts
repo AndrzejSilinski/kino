@@ -53,6 +53,28 @@ describe('API rezerwacji', () => {
     expect(sent().headers.get('X-Session-Id')).toBeNull();
   });
 
+  it('kod QR: z pełnego qr_url tylko ścieżka naszego API, z tokenem; obcy adres odrzucony BEZ wysyłania żądania', async () => {
+    const { api, fetchMock, sent } = setup();
+    fetchMock.mockResolvedValue(new Response('png', { status: 200, headers: { 'Content-Type': 'image/png' } }));
+
+    await api.ticketQr(`http://localhost:3000/api/v1/bookings/${REFERENCE}/tickets/7/qr`);
+    expect(sent().url).toBe(`/api/v1/bookings/${REFERENCE}/tickets/7/qr`);
+    expect(sent().headers.get('Authorization')).toBe('Bearer token-testowy');
+
+    await expect(api.ticketQr('https://evil.example/api/v1/bookings/X/tickets/7/qr')).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('PDF biletów: nazwa pliku z Content-Disposition', async () => {
+    const { api, fetchMock, sent } = setup();
+    fetchMock.mockResolvedValue(new Response('%PDF', { status: 200, headers: { 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename=bilety-${REFERENCE}.pdf` } }));
+
+    const result = await api.ticketsPdf(REFERENCE);
+
+    expect(sent().url).toBe(`/api/v1/bookings/${REFERENCE}/tickets/pdf`);
+    expect(result.filename).toBe(`bilety-${REFERENCE}.pdf`);
+  });
+
   it('rezygnacja: DELETE na podzasobie payment, bez nagłówka sesji zakupowej', async () => {
     const { api, fetchMock, sent } = setup();
     fetchMock.mockResolvedValue(json(200, { data: booking({ status: 'cancelled', status_label: 'Anulowana' }) }));

@@ -719,3 +719,43 @@ button:disabled {
 .payment-element {
   min-height: 4rem;
 }
+
+/* ─── Blok H4: bilety ──────────────────────────────────────────────────── */
+.tickets {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--space);
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+}
+
+.ticket {
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  padding: var(--space);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.ticket-info {
+  display: grid;
+  justify-items: center;
+  text-align: center;
+}
+
+/* Kod QR zawsze na białym tle z marginesem — ciemny motyw nie może odwrócić kontrastu, bo skaner go nie odczyta. */
+.ticket-qr {
+  width: 100%;
+  max-width: 200px;
+  height: auto;
+  padding: 0.5rem;
+  background: #fff;
+  border-radius: var(--radius);
+}
+
+.ticket-cancelled,
+.ticket-used {
+  opacity: 0.7;
+}
