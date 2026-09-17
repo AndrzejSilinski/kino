@@ -62,7 +62,7 @@ describe('ekran logowania', () => {
     await wrapper.get('form').trigger('submit');
     expect(wrapper.get('button[type="submit"]').attributes('disabled')).toBeDefined();
 
-    finish({ user: { id: 1, name: 'Anna', email: 'anna@example.com', role: 'customer', role_label: 'Klient', created_at: null }, token: '9|t', token_type: 'Bearer' });
+    finish({ user: { id: 1, name: 'Anna', email: 'anna@example.com', role: 'customer', role_label: 'Klient', avatar_url: null, created_at: null }, token: '9|t', token_type: 'Bearer' });
     await flushPromises();
 
     // Trasa /account ładuje widok leniwie (import()), więc nawigacja kończy się po kilku tickach.

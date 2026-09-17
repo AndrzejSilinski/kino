@@ -21,7 +21,22 @@ export interface User {
   email: string;
   role: UserRole;
   role_label: string;
+  /** Pełny adres obrazu w /storage (blok I) albo null. */
+  avatar_url: string | null;
   created_at: string | null;
+}
+
+/** NotificationSettingsResource (blok I). push_enabled = zgoda na serwerze, nie uprawnienie przeglądarki. */
+export interface NotificationSettings {
+  push_enabled: boolean;
+  push_consent_at: string | null;
+  screening_reminders: boolean;
+}
+
+export interface ChangePasswordPayload {
+  current_password: string;
+  password: string;
+  password_confirmation: string;
 }
 
 /** AuthController::tokenResponse */

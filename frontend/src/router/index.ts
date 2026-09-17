@@ -67,11 +67,31 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Załóż konto', guestOnly: true },
   },
   {
-    // Blok J rozbuduje konto o historię zakupów, profil i ustawienia powiadomień.
+    // Konto (blok J): układ z nawigacją i trasy potomne. meta rodzica (requiresAuth) łączy się
+    // z meta dziecka, więc strażnik chroni każdą podstronę.
     path: '/account',
-    name: 'account',
     component: () => import('@/views/AccountView.vue'),
-    meta: { title: 'Moje konto', requiresAuth: true },
+    meta: { requiresAuth: true },
+    children: [
+      {
+        path: '',
+        name: 'account',
+        component: () => import('@/views/account/AccountBookingsView.vue'),
+        meta: { title: 'Moje rezerwacje' },
+      },
+      {
+        path: 'profile',
+        name: 'account-profile',
+        component: () => import('@/views/account/AccountProfileView.vue'),
+        meta: { title: 'Profil i hasło' },
+      },
+      {
+        path: 'notifications',
+        name: 'account-notifications',
+        component: () => import('@/views/account/AccountNotificationsView.vue'),
+        meta: { title: 'Powiadomienia' },
+      },
+    ],
   },
   {
     // Każdy nieznany adres. nginx zwraca index.html dla wszystkich ścieżek SPA,

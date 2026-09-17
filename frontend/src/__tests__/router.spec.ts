@@ -35,6 +35,14 @@ describe('router', () => {
     expect(router.resolve('/bookings/123/payment-result').name).toBe('not-found');
   });
 
+  it('podstrony konta mają własne adresy i dziedziczą wymóg zalogowania po rodzicu', () => {
+    const router = makeRouter();
+
+    expect(router.resolve('/account')).toMatchObject({ name: 'account', meta: { requiresAuth: true } });
+    expect(router.resolve('/account/profile')).toMatchObject({ name: 'account-profile', meta: { requiresAuth: true } });
+    expect(router.resolve('/account/notifications')).toMatchObject({ name: 'account-notifications', meta: { requiresAuth: true } });
+  });
+
   it('każdy nieznany adres obsługuje ekran 404 (nginx oddaje index.html dla wszystkich ścieżek SPA)', async () => {
     const router = makeRouter();
     await router.push('/nie/ma/takiej/strony?x=1');

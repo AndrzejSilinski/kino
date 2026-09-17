@@ -87,6 +87,13 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  /** Profil zmieniony na ekranie konta (imię, avatar) — nagłówek i widoki widzą nowe dane od razu. */
+  function setUser(next: User): void {
+    if (token.value !== null) {
+      user.value = next;
+    }
+  }
+
   /** Zmiana tokenu w innej karcie (window 'storage'). */
   function syncFromStorage(event: Pick<StorageEvent, 'key'>): void {
     if (event.key !== TOKEN_KEY && event.key !== null) {
@@ -103,5 +110,5 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  return { token, user, ready, isAuthenticated, init, login, register, logout, clearSession, syncFromStorage };
+  return { token, user, ready, isAuthenticated, init, login, register, logout, clearSession, syncFromStorage, setUser };
 });

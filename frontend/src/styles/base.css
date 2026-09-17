@@ -759,3 +759,97 @@ button:disabled {
 .ticket-used {
   opacity: 0.7;
 }
+
+/* ─── Blok J: konto ────────────────────────────────────────────────────── */
+.account-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space);
+}
+
+.account-header h1 {
+  margin: 0;
+}
+
+.avatar {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex: none;
+}
+
+.avatar-large {
+  width: 96px;
+  height: 96px;
+}
+
+.avatar-placeholder {
+  display: grid;
+  place-items: center;
+  font-size: 1.5rem;
+  font-weight: 700;
+  background: var(--color-surface);
+  color: var(--color-muted);
+}
+
+.account-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem var(--space);
+  border-bottom: 1px solid var(--color-muted);
+  padding-bottom: 0.5rem;
+}
+
+.account-nav .is-active {
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.booking-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.booking-item {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem var(--space);
+  padding: 0.75rem var(--space);
+  border-radius: var(--radius);
+  background: var(--color-surface);
+}
+
+.booking-item-main {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.setting {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  align-items: start;
+}
+
+.setting input {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0.1rem 0 0;
+}
+
+.setting label {
+  display: grid;
+  gap: 0.15rem;
+}
+
+/* Etykieta pliku w roli przycisku: fokus z klawiatury trafia na ukryte pole, obwódka na etykietę. */
+input[type="file"].visually-hidden:focus-visible + .button-link {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}

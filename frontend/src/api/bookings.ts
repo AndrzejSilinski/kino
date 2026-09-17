@@ -8,7 +8,7 @@
 import { ApiError } from './errors';
 import type { BlobResponse, HttpClient } from './http';
 import { apiPathFromUrl } from '@/lib/apiPath';
-import type { Booking, CheckoutResult, Envelope } from './types';
+import type { Booking, CheckoutResult, Envelope, Paginated } from './types';
 
 export interface CheckoutResponse {
   /** true = 201 (płatność utworzona teraz), false = 200 (ta sama, rozpoczęta wcześniej). */
@@ -16,7 +16,12 @@ export interface CheckoutResponse {
   result: CheckoutResult;
 }
 
+/** Rozmiar strony historii zakupów (serwer przyjmuje 1–100). */
+export const BOOKINGS_PER_PAGE = 10;
+
 export interface BookingsApi {
+  /** Historia zakupów, od najnowszej (blok J). */
+  list(page: number, signal?: AbortSignal): Promise<Paginated<Booking>>;
   checkout(screeningId: number): Promise<CheckoutResponse>;
   /** Szczegóły rezerwacji właściciela (seans, bilety). 403/404 dla cudzej albo nieistniejącej. */
   show(reference: string, signal?: AbortSignal): Promise<Booking>;
@@ -35,6 +40,9 @@ export function createBookingsApi(http: HttpClient): BookingsApi {
         bookingSession: true,
       });
       return { created: status === 201, result: body.data };
+    },
+    async list(page, signal) {
+      return (await http.request<Paginated<Booking>>('/bookings', { query: { page, per_page: BOOKINGS_PER_PAGE }, signal })).body;
     },
     async show(reference, signal) {
       return (await http.request<Envelope<Booking>>(`/bookings/${encodeURIComponent(reference)}`, { signal })).body.data;

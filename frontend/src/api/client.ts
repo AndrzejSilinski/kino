@@ -4,6 +4,7 @@
  * Klient HTTP nie importuje store'ów ani routera (brak cyklicznych zależności i łatwe testy):
  * main.ts wpina mu przez configureHttp() sposób odczytu tokenu i reakcję na 401.
  */
+import { createAccountApi } from './account';
 import { createAuthApi } from './auth';
 import { createBookingsApi } from './bookings';
 import { createBookingSessionStore } from './bookingSession';
@@ -34,3 +35,5 @@ export const catalogApi = createCatalogApi(http);
 export const seatsApi = createSeatsApi(http);
 
 export const bookingsApi = createBookingsApi(http);
+
+export const accountApi = createAccountApi(http);

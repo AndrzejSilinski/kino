@@ -14,7 +14,7 @@ vi.mock('@/api/client', () => ({ authApi: api }));
 
 const { TOKEN_KEY, useAuthStore } = await import('@/stores/auth');
 
-const user: User = { id: 7, name: 'Anna Nowak', email: 'anna@example.com', role: 'customer', role_label: 'Klient', created_at: null };
+const user: User = { id: 7, name: 'Anna Nowak', email: 'anna@example.com', role: 'customer', role_label: 'Klient', avatar_url: null, created_at: null };
 const unauthenticated = () => new ApiError({ status: 401, code: 'UNAUTHENTICATED', message: 'Wymagane jest zalogowanie.' });
 
 describe('store sesji konta', () => {
