@@ -5,7 +5,8 @@
  */
 import type { Cart } from '@/api/types';
 
-defineProps<{ cart: Cart | null; maxSeats: number; busy: boolean }>();
+// readonly: podsumowanie przed płatnością i plan sali z rozpoczętą płatnością — bez "Wyczyść wybór".
+defineProps<{ cart: Cart | null; maxSeats: number; busy: boolean; readonly?: boolean }>();
 const emit = defineEmits<{ clear: [] }>();
 </script>
 
@@ -26,7 +27,7 @@ const emit = defineEmits<{ clear: [] }>();
         <strong data-test="cart-total">{{ cart.total.formatted }}</strong>
       </p>
       <div class="cart-actions">
-        <button type="button" class="link-button" :disabled="busy" @click="emit('clear')">Wyczyść wybór</button>
+        <button v-if="!readonly" type="button" class="link-button" :disabled="busy" @click="emit('clear')">Wyczyść wybór</button>
         <slot name="checkout" />
       </div>
     </template>

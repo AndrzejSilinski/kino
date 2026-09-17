@@ -690,3 +690,33 @@ button:disabled {
   border: 2px dashed var(--color-muted);
   background: var(--color-surface);
 }
+
+/* ─── Blok H2: podsumowanie, rozpoczęta płatność ───────────────────────── */
+/* Link w roli przycisku (nawigacja zostaje linkiem: otwieranie w nowej karcie, czytnik ogłasza "link"). */
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0.5rem 1.25rem;
+  border-radius: var(--radius);
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  text-decoration: none;
+}
+
+.pending-payment,
+.checkout-problem {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.pending-payment p,
+.checkout-problem p {
+  margin: 0;
+}
+
+.payment-slot {
+  padding: var(--space);
+  border: 1px dashed var(--color-muted);
+  border-radius: var(--radius);
+}

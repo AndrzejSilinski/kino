@@ -5,6 +5,7 @@
  * main.ts wpina mu przez configureHttp() sposób odczytu tokenu i reakcję na 401.
  */
 import { createAuthApi } from './auth';
+import { createBookingsApi } from './bookings';
 import { createBookingSessionStore } from './bookingSession';
 import { createCatalogApi } from './catalog';
 import { createHttpClient } from './http';
@@ -31,3 +32,5 @@ export const authApi = createAuthApi(http);
 export const catalogApi = createCatalogApi(http);
 
 export const seatsApi = createSeatsApi(http);
+
+export const bookingsApi = createBookingsApi(http);

@@ -13,6 +13,10 @@
  * Timer: koszyk wygasa razem z NAJWCZEŚNIEJSZĄ blokadą, a każda blokada ma własny termin (serwer
  * nie wydłuża starszych). Po zerze wraca do puli tylko to jedno miejsce — dlatego pobieramy koszyk
  * od nowa zamiast czyścić cały wybór.
+ *
+ * Rozpoczęta płatność (blok H2): koszyk z pending_booking oznacza, że blokady należą do rezerwacji.
+ * Serwer ich wtedy nie zwalnia, więc plan sali jest zamrożony — zmiana wyboru wymaga rezygnacji
+ * z płatności (DELETE /bookings/{ref}/payment) albo jej dokończenia.
  */
 import { computed, ref, shallowRef } from 'vue';
 import { defineStore } from 'pinia';
@@ -48,6 +52,7 @@ export const useCartStore = defineStore('cart', () => {
 
   const ownSeatIds = computed<ReadonlySet<number>>(() => new Set(cart.value?.seats.map((seat) => seat.seat_id) ?? []));
   const seatsCount = computed(() => cart.value?.seats_count ?? 0);
+  const pendingBooking = computed(() => cart.value?.pending_booking ?? null);
 
   function setPending(seatId: number, on: boolean): void {
     const next = new Set(pending.value);
@@ -142,6 +147,10 @@ export const useCartStore = defineStore('cart', () => {
     if (!seat || id === null || closed.value) {
       return null;
     }
+    if (pendingBooking.value !== null) {
+      notice.value = { tone: 'info', text: 'Masz rozpoczętą płatność za wybrane miejsca. Dokończ ją albo z niej zrezygnuj, żeby zmienić wybór.' };
+      return null;
+    }
     const presentation = presentSeat(seat, ownSeatIds.value, pending.value);
     if (!presentation.actionable) {
       return null;
@@ -185,7 +194,7 @@ export const useCartStore = defineStore('cart', () => {
 
   function clear(): Promise<void> | null {
     const id = screeningId.value;
-    if (id === null || ownSeatIds.value.size === 0) {
+    if (id === null || ownSeatIds.value.size === 0 || pendingBooking.value !== null) {
       return null;
     }
     const released = [...ownSeatIds.value];
@@ -197,6 +206,32 @@ export const useCartStore = defineStore('cart', () => {
         handleError(error, released[0] ?? 0);
       }
     });
+  }
+
+  /**
+   * 409 BOOKING_ALREADY_PENDING: do rozpoczętej płatności dobrano miejsca (np. w zduplikowanej karcie,
+   * która dzieli sesję zakupową). "Zwolnij wszystko" oddaje tylko te dobrane — blokady wpięte
+   * w rezerwację serwer zostawia — więc po nim checkout znów zwraca rozpoczętą płatność.
+   */
+  async function releaseExtraSeats(): Promise<boolean> {
+    const id = screeningId.value;
+    if (id === null) {
+      return false;
+    }
+    try {
+      applyCart(await seatsApi.releaseAll(id));
+      return true;
+    } catch (error) {
+      notice.value = { tone: 'error', text: messageFor(error) };
+      return false;
+    }
+  }
+
+  /** Po rezygnacji z płatności: miejsca wróciły do puli — świeży koszyk i plan z serwera. */
+  async function afterPaymentAbandoned(): Promise<void> {
+    notice.value = { tone: 'info', text: 'Zrezygnowano z płatności. Miejsca wróciły do puli — możesz wybrać je ponownie.' };
+    // Koszyk bez dawnych miejsc: applyCart sam dociągnie migawkę planu (utracone własne blokady).
+    await refreshCart();
   }
 
   /** Najwcześniejsza blokada wygasła: serwer zwolnił to miejsce — pobieramy resztę koszyka i plan. */
@@ -239,7 +274,7 @@ export const useCartStore = defineStore('cart', () => {
   }
 
   return {
-    screeningId, cart, deadline, pending, notice, closed, maxSeats, ownSeatIds, seatsCount,
-    start, toggle, clear, refreshCart, onExpired, resync, dismissNotice, onSeatChanges,
+    screeningId, cart, deadline, pending, notice, closed, maxSeats, ownSeatIds, seatsCount, pendingBooking,
+    start, toggle, clear, refreshCart, onExpired, resync, dismissNotice, onSeatChanges, releaseExtraSeats, afterPaymentAbandoned,
   };
 });

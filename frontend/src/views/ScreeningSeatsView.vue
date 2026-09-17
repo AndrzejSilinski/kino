@@ -4,8 +4,9 @@
  * i w czystych modułach (seatState, seatLayout) — widok tylko łączy je z komponentami.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { RouterLink, useRoute } from 'vue-router';
+import { RouterLink, useRoute, useRouter } from 'vue-router';
 import { loadClientConfig } from '@/api/clientConfig';
+import PendingPaymentNotice from '@/components/checkout/PendingPaymentNotice.vue';
 import RealtimeBanner from '@/components/realtime/RealtimeBanner.vue';
 import CartPanel from '@/components/seats/CartPanel.vue';
 import CountdownTimer from '@/components/seats/CountdownTimer.vue';
@@ -16,11 +17,14 @@ import { buildSeatLayout } from '@/lib/seatLayout';
 import { getRealtimeConnection } from '@/realtime';
 import { createSeatSync, type SeatSync, type SyncStatus } from '@/realtime/seatSync';
 import { DEFAULT_MAX_SEATS, useCartStore } from '@/stores/cart';
+import { useCheckoutStore } from '@/stores/checkout';
 import { useSeatMapStore } from '@/stores/seatMap';
 
 const route = useRoute();
+const router = useRouter();
 const seatMap = useSeatMapStore();
 const cart = useCartStore();
+const checkout = useCheckoutStore();
 
 const id = computed(() => Number(route.params.id));
 const screening = computed(() => seatMap.screening);
@@ -81,6 +85,20 @@ async function start(screeningId: number): Promise<void> {
   }
 }
 
+function goToCheckout(): void {
+  void router.push({ name: 'checkout', params: { id: id.value } });
+}
+
+/** Rezygnacja z rozpoczętej płatności prosto z planu sali (blok H2). */
+async function abandonPayment(): Promise<void> {
+  const reference = cart.pendingBooking?.reference ?? null;
+  if (await checkout.abandon(reference)) {
+    await cart.afterPaymentAbandoned();
+  } else if (checkout.problem) {
+    cart.notice = { tone: 'error', text: checkout.problem.message };
+  }
+}
+
 function onVisibility(): void {
   if (document.visibilityState === 'visible') {
     void cart.resync();
@@ -132,16 +150,19 @@ onBeforeUnmount(() => {
         <button type="button" class="link-button" aria-label="Zamknij komunikat" @click="cart.dismissNotice">✕</button>
       </div>
 
+      <PendingPaymentNotice v-if="cart.pendingBooking" :screening-id="id" :busy="checkout.phase === 'abandoning'" @abandon="abandonPayment" />
+
       <div class="seat-selection-layout">
         <div class="stack">
-          <SeatMap :layout="layout" :own-seat-ids="cart.ownSeatIds" :pending-seat-ids="cart.pending" :disabled="cart.closed" @toggle="cart.toggle" />
+          <SeatMap :layout="layout" :own-seat-ids="cart.ownSeatIds" :pending-seat-ids="cart.pending" :disabled="cart.closed || cart.pendingBooking !== null" @toggle="cart.toggle" />
           <SeatLegend />
         </div>
         <div class="stack seat-selection-side">
           <CountdownTimer :deadline="cart.deadline" @expire="cart.onExpired" />
-          <CartPanel :cart="cart.cart" :max-seats="cart.maxSeats" :busy="cart.pending.size > 0" @clear="cart.clear">
-            <template #checkout>
-              <button type="button" disabled title="Podsumowanie i płatność pojawią się w kolejnym kroku budowy aplikacji">Przejdź do podsumowania</button>
+          <CartPanel :cart="cart.cart" :max-seats="cart.maxSeats" :busy="cart.pending.size > 0" :readonly="cart.pendingBooking !== null" @clear="cart.clear">
+            <template v-if="!cart.pendingBooking" #checkout>
+              <!-- Wyłączony, dopóki serwer nie potwierdzi kliknięć w kolejce: podsumowanie pokazałoby stary koszyk. -->
+              <button type="button" :disabled="cart.pending.size > 0" data-test="go-to-checkout" @click="goToCheckout">Przejdź do podsumowania</button>
             </template>
           </CartPanel>
         </div>

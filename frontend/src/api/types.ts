@@ -171,6 +171,16 @@ export interface CartSeat {
   lock_expires_at: string;
 }
 
+/**
+ * Rozpoczęta płatność za miejsca z koszyka (Etap 8, blok H1). Blokady są wtedy wpięte w rezerwację:
+ * serwer ich nie zwalnia, a plan sali trzeba zamrozić do końca płatności albo rezygnacji.
+ */
+export interface PendingBooking {
+  reference: string;
+  expires_at: string;
+  expires_in_seconds: number;
+}
+
 /** Koszyk: GET/POST/DELETE /screenings/{id}/seat-locks. Timer = najwcześniejsza blokada. */
 export interface Cart {
   seats: CartSeat[];
@@ -178,4 +188,41 @@ export interface Cart {
   total: Money;
   expires_at: string | null;
   expires_in_seconds: number | null;
+  pending_booking: PendingBooking | null;
+}
+
+export type BookingStatus = 'pending' | 'paid' | 'cancelled' | 'expired' | 'refunded';
+
+/** BookingResource. screening i tickets tylko tam, gdzie serwer je ładuje (szczegóły, lista). */
+export interface Booking {
+  reference: string;
+  status: BookingStatus;
+  status_label: string;
+  total: Money;
+  tickets_count?: number;
+  created_at: string | null;
+  paid_at: string | null;
+  expires_at: string | null;
+  cancellation?: { cancelled_at: string | null; refund: 'none' | 'pending' | 'refunded' };
+  screening?: Omit<ScreeningDetails, 'prices'>;
+}
+
+/**
+ * CheckoutResource.payment. client_secret to jedyna rzecz, której Stripe.js potrzebuje do zapłaty —
+ * trzymamy go WYŁĄCZNIE w pamięci (nie w adresie, nie w storage, nie w logach). Po F5 dostajemy go
+ * ponownie z powtórzonego checkoutu (serwer zwraca tę samą płatność).
+ */
+export interface CheckoutPayment {
+  provider: 'stripe';
+  publishable_key: string;
+  client_secret: string;
+  status: string;
+  expires_at: string;
+  expires_in_seconds: number;
+}
+
+/** POST /screenings/{id}/booking — 201 nowa płatność, 200 ta sama co wcześniej. */
+export interface CheckoutResult {
+  booking: Booking;
+  payment: CheckoutPayment;
 }

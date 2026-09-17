@@ -33,6 +33,14 @@ export const routes: RouteRecordRaw[] = [
     meta: { title: 'Wybór miejsc' },
   },
   {
+    // Podsumowanie i płatność (blok H2). Wymaga konta: rezerwacja ma właściciela. Koszyk przetrwa
+    // logowanie, bo sesja zakupowa jest w sessionStorage karty, a nie w koncie.
+    path: '/screenings/:id(\\d+)/checkout',
+    name: 'checkout',
+    component: () => import('@/views/CheckoutView.vue'),
+    meta: { title: 'Podsumowanie i płatność', requiresAuth: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('@/views/LoginView.vue'),

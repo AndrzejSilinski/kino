@@ -61,6 +61,7 @@ export function cartOf(seatIds: number[], expiresIn: number | null = 600): Cart 
     total: { amount: total, currency: 'PLN', formatted: `${(total / 100).toFixed(2).replace('.', ',')} zł` },
     expires_at: seatIds.length > 0 ? '2026-09-16T21:10:00+00:00' : null,
     expires_in_seconds: seatIds.length > 0 ? expiresIn : null,
+    pending_booking: null,
   };
 }
 
