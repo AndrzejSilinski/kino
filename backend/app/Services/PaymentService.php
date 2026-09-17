@@ -97,6 +97,67 @@ class PaymentService
         return $intent;
     }
 
+    /**
+     * Rezygnacja klienta z rozpoczętej płatności (Etap 8, blok H1).
+     *
+     * Bez tego porzucona płatność trzymałaby miejsca do końca okna płatności
+     * (PAYMENT_WINDOW_SECONDS), a klient, który chce zmienić wybór, musiałby czekać.
+     * Dotyczy WYŁĄCZNIE rezerwacji pending — nic nie zostało pobrane, więc nie ma
+     * zwrotu. Anulowanie opłaconej to osobna ścieżka administratora (cancelByAdmin).
+     *
+     * Kolejność jak w expireAbandoned(): najpierw baza (miejsca wracają do sprzedaży
+     * pod blokadą wiersza rezerwacji), potem Stripe. Wyścigi rozstrzygają istniejące
+     * gałęzie webhooka:
+     *   - karta autoryzowana w tej samej chwili: fulfil() zastaje cancelled,
+     *     autoryzacja zostaje anulowana i klient nie widzi obciążenia,
+     *   - BLIK potwierdzony w tej samej chwili: anulowanie u dostawcy się nie uda,
+     *     a zdarzenie succeeded trafi na anulowaną rezerwację i uruchomi zwrot.
+     * Dlatego porażka rozmowy ze Stripe'em nie zmienia odpowiedzi: miejsca są już
+     * zwolnione, a pieniędzy bez biletów system i tak nie zatrzyma.
+     *
+     * Idempotentne: rezerwacja już anulowana albo wygasła zwraca swój stan bez
+     * ponownego wołania dostawcy.
+     *
+     * @throws BookingNotPayableException gdy rezerwacja jest opłacona albo zwrócona
+     */
+    public function abandonPayment(Booking $booking): Booking
+    {
+        if (in_array($booking->status, [BookingStatus::Cancelled, BookingStatus::Expired], true)) {
+            return $booking;
+        }
+
+        if ($booking->status !== BookingStatus::Pending) {
+            throw new BookingNotPayableException($booking->status);
+        }
+
+        if (! $this->bookings->cancel($booking)) {
+            // Webhook albo scheduler nas wyprzedził — oddajemy stan, który zastał.
+            $fresh = $booking->refresh();
+
+            if ($fresh->status === BookingStatus::Paid || $fresh->status === BookingStatus::Refunded) {
+                throw new BookingNotPayableException($fresh->status);
+            }
+
+            return $fresh;
+        }
+
+        if ($booking->stripe_payment_intent_id !== null) {
+            try {
+                $this->gateway->cancelIntent(
+                    $booking->stripe_payment_intent_id,
+                    $this->key($booking, 'cancel'),
+                );
+            } catch (PaymentRejectedException|PaymentProviderUnavailableException $e) {
+                Log::warning('Nie udało się anulować płatności po rezygnacji klienta.', [
+                    'booking' => $booking->reference,
+                    'code' => $e->errorCode(),
+                ]);
+            }
+        }
+
+        return $booking->refresh();
+    }
+
     /** Deterministyczny klucz idempotencji — nigdy losowy. */
     private function key(Booking $booking, string $operation): string
     {

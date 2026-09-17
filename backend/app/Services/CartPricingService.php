@@ -2,7 +2,9 @@
 
 namespace App\Services;
 
+use App\Enums\BookingStatus;
 use App\Exceptions\PriceNotConfiguredException;
+use App\Models\Booking;
 use App\Models\Screening;
 use App\Models\SeatLock;
 use App\Support\Money;
@@ -33,7 +35,8 @@ class CartPricingService
      *     seats_count: int,
      *     total: array<string, mixed>,
      *     expires_at: string|null,
-     *     expires_in_seconds: int|null
+     *     expires_in_seconds: int|null,
+     *     pending_booking: array{reference: string, expires_at: string, expires_in_seconds: int}|null
      * }
      *
      * @throws PriceNotConfiguredException
@@ -100,12 +103,56 @@ class CartPricingService
             'expires_in_seconds' => $expiresAt !== null
                 ? max(0, (int) $now->diffInSeconds($expiresAt, false))
                 : null,
+            'pending_booking' => $this->pendingBooking($locks, $now),
         ];
     }
 
     /**
      * @param  Collection<int, SeatLock>  $locks
      */
+    /**
+     * Rozpoczęta płatność za miejsca z koszyka (Etap 8, blok H1).
+     *
+     * Po checkoucie blokady są wpięte w rezerwację (seat_locks.booking_id) i należą
+     * do płatności: DELETE ich nie zwalnia, a dobranie miejsca kończy się przy kolejnym
+     * checkoucie błędem BOOKING_ALREADY_PENDING. Bez tej informacji klient nie wie,
+     * że plan sali trzeba zamrozić, a po F5 — dokąd wrócić. Stan podaje serwer,
+     * bo tylko on go zna (sessionStorage karty zgadywałby, a aplikacja mobilna
+     * musiałaby zgadywać po swojemu).
+     *
+     * Jedno zapytanie tylko wtedy, gdy któraś blokada ma booking_id. Aktywna blokada
+     * wpięta w rezerwację oznacza rezerwację pending (opłacenie i wygaśnięcie zwalniają
+     * blokady), ale warunek statusu jest jawny — nie wnioskujemy go z cudzej reguły.
+     *
+     * @param  Collection<int, SeatLock>  $locks
+     * @return array{reference: string, expires_at: string, expires_in_seconds: int}|null
+     */
+    private function pendingBooking(Collection $locks, CarbonImmutable $now): ?array
+    {
+        $bookingId = $locks->whereNotNull('booking_id')->pluck('booking_id')->first();
+
+        if ($bookingId === null) {
+            return null;
+        }
+
+        $booking = Booking::query()
+            ->whereKey($bookingId)
+            ->where('status', BookingStatus::Pending)
+            ->first(['id', 'reference', 'expires_at']);
+
+        if ($booking === null || $booking->expires_at === null) {
+            return null;
+        }
+
+        $expiresAt = CarbonImmutable::parse($booking->expires_at);
+
+        return [
+            'reference' => $booking->reference,
+            'expires_at' => $expiresAt->toIso8601String(),
+            'expires_in_seconds' => max(0, (int) $now->diffInSeconds($expiresAt, false)),
+        ];
+    }
+
     private function earliestExpiry(Collection $locks): ?CarbonImmutable
     {
         $earliest = null;

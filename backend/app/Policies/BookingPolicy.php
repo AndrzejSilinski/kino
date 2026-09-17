@@ -80,6 +80,19 @@ class BookingPolicy
     }
 
     /**
+     * Rezygnacja klienta z rozpoczętej płatności (Etap 8, blok H1).
+     *
+     * WYŁĄCZNIE właściciel — także nie administrator: rezerwację klienta administrator
+     * anuluje w panelu z powodem i rozliczeniem (cancel()). To nie jest "samodzielna
+     * rezygnacja ze zwrotem" z komentarza przy cancel(): dotyczy tylko nieopłaconej
+     * rezerwacji, co pilnuje PaymentService::abandonPayment(), a nie policy.
+     */
+    public function abandonPayment(User $user, Booking $booking): bool
+    {
+        return $booking->user_id === $user->id;
+    }
+
+    /**
      * Nasłuchiwanie kanału rezerwacji private-bookings.{reference} (Etap 6).
      *
      * WYŁĄCZNIE właściciel — inaczej niż view(), które wpuszcza też

@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\V1\ArticleController;
 use App\Http\Controllers\Api\V1\CheckoutController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BookingController;
+use App\Http\Controllers\Api\V1\BookingPaymentController;
 use App\Http\Controllers\Api\V1\BookingTicketsController;
 use App\Http\Controllers\Api\V1\BroadcastingAuthController;
 use App\Http\Controllers\Api\V1\CinemaController;
@@ -137,6 +138,12 @@ Route::middleware('auth:sanctum')
     ->group(function () {
         Route::get('/', [BookingController::class, 'index'])->name('index');
         Route::get('/{booking}', [BookingController::class, 'show'])->name('show');
+
+        // Rezygnacja z rozpoczętej płatności (Etap 8, blok H1): miejsca wracają do sprzedaży
+        // od razu, a nie po oknie płatności. DELETE na podzasobie "payment", bo usuwamy
+        // rozpoczętą płatność, a nie rezerwację — ta zostaje w historii jako anulowana.
+        Route::delete('/{booking}/payment', [BookingPaymentController::class, 'destroy'])
+            ->name('payment.destroy');
 
         // Bilety rezerwacji (Etap 5, decyzje 78 i 79). scopeBindings() szuka
         // {ticket} wyłącznie wśród $booking->tickets(): id biletu z innej
