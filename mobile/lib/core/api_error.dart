@@ -37,6 +37,17 @@ class ApiError implements Exception {
   static const String seatsNotInHall = 'SEATS_NOT_IN_HALL';
   static const String invalidSessionId = 'INVALID_SESSION_ID';
 
+  /// Kody checkoutu, potwierdzone rozpoznaniem fazy 3.
+  ///
+  /// `EMPTY_CART` (422) — nie ma czego kupić. `BOOKING_ALREADY_PENDING` (409)
+  /// — koszyk zmienił się po rozpoczęciu płatności; w `context.booking_reference`
+  /// przychodzi numer rezerwacji, do której klient ma wrócić.
+  /// `BOOKING_NOT_PAYABLE` (409) — rezerwacja nie jest już do zapłacenia
+  /// (wygasła albo zmieniła status).
+  static const String emptyCart = 'EMPTY_CART';
+  static const String bookingAlreadyPending = 'BOOKING_ALREADY_PENDING';
+  static const String bookingNotPayable = 'BOOKING_NOT_PAYABLE';
+
   /// Kody, których serwer nie zna — powstają tylko po stronie aplikacji.
   static const String networkError = 'NETWORK_ERROR';
   static const String invalidResponse = 'INVALID_RESPONSE';
@@ -117,6 +128,13 @@ class ApiError implements Exception {
       return const <int>[];
     }
     return raw.whereType<int>().toList(growable: false);
+  }
+
+  /// Numer rezerwacji z `context.booking_reference` — przy 409 checkoutu
+  /// wskazuje rozpoczętą płatność, do której trzeba wrócić.
+  String? get bookingReference {
+    final Object? raw = context['booking_reference'];
+    return raw is String && raw.isNotEmpty ? raw : null;
   }
 
   /// Pierwszy komunikat walidacji dla pola formularza albo null.

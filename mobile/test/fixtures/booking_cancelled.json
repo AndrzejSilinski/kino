@@ -1,0 +1,19 @@
+{
+  "data": {
+    "reference": "01M3MK53H15CAMZB8DE9AFF06Q",
+    "status": "cancelled",
+    "status_label": "Anulowana",
+    "total": {
+      "amount": 4370,
+      "currency": "PLN",
+      "formatted": "43,70 zł"
+    },
+    "created_at": "2026-09-28T18:06:39+00:00",
+    "paid_at": null,
+    "expires_at": null,
+    "cancellation": {
+      "cancelled_at": "2026-09-28T18:09:01+00:00",
+      "refund": "none"
+    }
+  }
+}

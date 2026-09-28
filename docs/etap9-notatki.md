@@ -653,3 +653,62 @@ zapamiętać: **strefa testów widgetów ma własny zegar i własną pętlę zda
 czeka na czas albo na strumień, zachowuje się tam inaczej niż w zwykłym teście. Dlatego logikę
 czasu rzeczywistego testujemy w `test()`, a w `testWidgets` sprawdzamy wyłącznie to, co widać
 na ekranie.
+
+## Blok H1 — kontrakt płatności i stan checkoutu
+
+### Decyzje
+
+**309. Nieznany status rezerwacji to `unknown`, a nie wyjątek.** Tak samo jak przy statusie
+miejsca (decyzja 284), ale powód jest tu mocniejszy: to historia ZAKUPÓW klienta. Gdyby kino
+dodało szósty status, lista rezerwacji ma się pokazać, a nie wywrócić. W takiej sytuacji
+pokazujemy etykietę z serwera i nie pozwalamy na żadną akcję, której nie rozumiemy — bo
+`isPending`, `isPaid` i `isClosed` są wtedy wszystkie fałszywe, więc ekran sam z siebie nie
+zaproponuje ani płatności, ani biletu, ani anulowania.
+
+**310. Klucz publiczny Stripe'a przychodzi Z SERWERA, nie z parametru buildu.** Gdyby był
+wkompilowany, podmiana konta Stripe wymagałaby wydania nowej wersji aplikacji — a wersja ze sklepu
+żyje u ludzi miesiącami i nie ma sposobu, żeby wymusić aktualizację. SPA bierze ten klucz z tego
+samego miejsca, więc oba klienty są zasilane jednym ustawieniem serwera. Sam `client_secret` nie
+jest sekretem konta (tym jest klucz tajny, który nigdy nie opuszcza serwera), ale jest przepustką
+do TEJ płatności, więc nie trafia do logów, raportów ani komunikatów o błędach — `toString()`
+obu obiektów pokazuje tylko dostawcę i status, i jest na to test.
+
+**311. Status intencji płatności trzymamy jako surowy napis, nie jako wyliczenie.** Lista statusów
+Stripe'a jest długa i zmienia się niezależnie od nas. Aplikacja zadaje jej tylko dwa pytania —
+„czy trzeba jeszcze zapłacić” (`requires_payment_method`) i „czy poszło” (`succeeded`) — więc
+wyliczenie dałoby tu pozorną ścisłość i realne ryzyko wyjątku przy statusie, który nas nie
+dotyczy.
+
+**312. Checkout nie wysyła NICZEGO w ciele żądania.** Miejsca wynikają z blokad przypisanych do
+sesji zakupowej, a kwota z cennika seansu. Klient nie ma jak wpłynąć na to, ile zapłaci, bo nie
+ma czego podać. To jest warte wypowiedzenia na głos na rozmowie: kwota policzona po stronie
+klienta i przesłana do serwera to klasyczna dziura, a tutaj nie da się jej zrobić, bo pola
+nie istnieją. Test pilnuje dosłownie tego: `expect(sent.single.body, isEmpty)`.
+
+**313. O tym, czy klient zapłacił, rozstrzyga SERWER, a nie wynik z telefonu.** PaymentSheet
+potrafi wrócić z sukcesem, zanim webhook Stripe'a dotrze do naszego serwera — a to webhook
+oznacza rezerwację jako opłaconą. Aplikacja, która na podstawie własnego wyniku pokaże „kupione”,
+będzie czasem kłamać, i to akurat w tę stronę, która boli najbardziej: klient zobaczy bilet,
+którego nie ma w bazie. Dlatego po powrocie z płatności pytamy serwer o rezerwację, aż przestanie
+być `pending`. Koniec okna odpytywania NIE znaczy „nie zapłacono”, tylko „potwierdzenie jeszcze
+nie dotarło” — to dwie różne rzeczy i dostaje o tym osobny komunikat. Okno jest parametrem
+(`checkoutPollingProvider`), żeby w testach trwało milisekundy zamiast pół minuty (nauczka
+z bloku G1).
+
+**314. Wejście na ekran podsumowania NIE tworzy płatności.** `build()` kontrolera zwraca stan
+pusty; intencja w Stripe powstaje dopiero po świadomym kliknięciu. Inaczej samo obejrzenie ekranu
+(albo cofnięcie się i wejście ponownie) zostawiałoby w Stripe ślad po nieudanych płatnościach
+i — co gorsza — zamieniało koszyk w rezerwację, blokując miejsca komuś, kto by je kupił.
+Powrót do przerwanej płatności obsługuje sam serwer: 201 dla nowej, 200 dla powtórzenia na
+NIEZMIENIONYM koszyku, 409 z numerem rezerwacji, gdy koszyk się w międzyczasie zmienił.
+Wszystkie trzy potwierdzone rozpoznaniem fazy 3 na żywym serwerze.
+
+### Pułapki
+
+**DR. Fikstura nie może WYGLĄDAĆ jak prawdziwy sekret.** Wykonawca paczek skanuje wszystko, co
+wychodzi, m.in. wzorcami `pi_…_secret_…` i `pk_live_…`. Fikstura checkoutu z realistycznie
+wyglądającym `client_secret` zatrzymałaby cały blok na skanerze — i słusznie, bo skaner nie ma
+jak odróżnić sekretu od jego atrapy. Dlatego wartości w fiksturze są celowo NIEPODOBNE do
+prawdziwych (`pk_test_fikstura`, `sekret-testowy-fikstura`), a testy sprawdzają tylko to, że pola
+są niepuste i że nie wyciekają w `toString()`. Zasada ogólna: fikstura ma mieć kształt prawdziwej
+odpowiedzi, a nie jej wygląd.

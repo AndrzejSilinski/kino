@@ -71,12 +71,24 @@ class FakeBookingApi {
     this.onLock,
     this.onDelete,
     this.onSeatMap,
+    this.onCheckout,
+    this.onBooking,
+    this.onCancelPayment,
     this.maxSeats = 10,
   });
 
   final http.Response Function(List<int> seatIds)? onLock;
   final http.Response Function(String path)? onDelete;
   final http.Response Function()? onSeatMap;
+
+  /// POST /screenings/{id}/booking — rozpoczęcie płatności.
+  final http.Response Function(int call)? onCheckout;
+
+  /// GET /bookings/{reference} — stan rezerwacji (odpytywanie po płatności).
+  final http.Response Function(int call)? onBooking;
+
+  /// DELETE /bookings/{reference}/payment — rezygnacja.
+  final http.Response Function(String reference)? onCancelPayment;
 
   /// Limit miejsc podawany w `client-config` — tak podstawiamy go w testach,
   /// bo setter `state` notifiera jest `@protected` (pułapka DB).
@@ -86,6 +98,8 @@ class FakeBookingApi {
   int seatMapCalls = 0;
   int lockCalls = 0;
   int deleteCalls = 0;
+  int checkoutCalls = 0;
+  int bookingCalls = 0;
 
   http.Response handle(http.Request request) {
     final String path = request.url.path;
@@ -100,6 +114,23 @@ class FakeBookingApi {
     if (path.endsWith('/seat-map')) {
       seatMapCalls++;
       return onSeatMap?.call() ?? reply(envelope('seat_map'));
+    }
+    // Ścieżki checkoutu sprawdzamy PRZED ogólnymi gałęziami metod: inaczej
+    // POST na /booking wpadłby do obsługi blokad miejsc.
+    if (path.endsWith('/booking') && request.method == 'POST') {
+      checkoutCalls++;
+      return onCheckout?.call(checkoutCalls) ??
+          reply(envelope('checkout'), 201);
+    }
+    if (path.endsWith('/payment') && request.method == 'DELETE') {
+      final List<String> parts = path.split('/');
+      final String reference = parts.length >= 2 ? parts[parts.length - 2] : '';
+      return onCancelPayment?.call(reference) ??
+          reply(envelope('booking_cancelled'));
+    }
+    if (path.contains('/bookings/') && request.method == 'GET') {
+      bookingCalls++;
+      return onBooking?.call(bookingCalls) ?? reply(envelope('booking_paid'));
     }
     if (request.method == 'POST') {
       lockCalls++;

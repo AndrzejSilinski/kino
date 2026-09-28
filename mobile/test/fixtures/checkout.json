@@ -1,0 +1,25 @@
+{
+  "data": {
+    "booking": {
+      "reference": "01M3MK53H15CAMZB8DE9AFF06Q",
+      "status": "pending",
+      "status_label": "Oczekuje na płatność",
+      "total": {
+        "amount": 4370,
+        "currency": "PLN",
+        "formatted": "43,70 zł"
+      },
+      "created_at": "2026-09-28T18:06:39+00:00",
+      "paid_at": null,
+      "expires_at": "2026-09-28T18:16:39+00:00"
+    },
+    "payment": {
+      "provider": "stripe",
+      "publishable_key": "pk_test_fikstura",
+      "client_secret": "sekret-testowy-fikstura",
+      "status": "requires_payment_method",
+      "expires_at": "2026-09-28T18:16:39+00:00",
+      "expires_in_seconds": 598
+    }
+  }
+}
