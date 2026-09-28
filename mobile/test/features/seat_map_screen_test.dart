@@ -192,6 +192,28 @@ void main() {
     expect(tileOf(tester, 103).status, SeatStatus.free);
   });
 
+  testWidgets('pełny koszyk daje przejście do płatności', (
+    WidgetTester tester,
+  ) async {
+    await tester.pumpWidget(
+      screenWith(FakeBookingApi()..cart = cartOf(<int>[103])),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Do płatności'), findsOneWidget);
+  });
+
+  testWidgets('pusty koszyk NIE daje przejścia do płatności', (
+    WidgetTester tester,
+  ) async {
+    // Przycisk, który prowadzi do ekranu z komunikatem „koszyk jest pusty”,
+    // jest gorszy niż brak przycisku.
+    await tester.pumpWidget(screenWith(FakeBookingApi()));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Do płatności'), findsNothing);
+  });
+
   testWidgets('rozpoczęta płatność zamraża plan sali', (
     WidgetTester tester,
   ) async {
@@ -210,6 +232,10 @@ void main() {
     expect(find.textContaining('Płatność za te miejsca'), findsOneWidget);
     expect(tileOf(tester, 102).onTap, isNull);
     expect(tileOf(tester, 103).onTap, isNull);
+    // Powrót do rozpoczętej płatności prowadzi z paska nad planem, a pasek
+    // koszyka nie dubluje tego przycisku.
+    expect(find.text('Wróć do płatności'), findsOneWidget);
+    expect(find.text('Do płatności'), findsNothing);
   });
 
   testWidgets(

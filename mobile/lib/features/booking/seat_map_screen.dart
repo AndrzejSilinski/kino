@@ -19,10 +19,12 @@ import 'package:cinema/features/booking/seat_grid.dart';
 import 'package:cinema/features/booking/seat_legend.dart';
 import 'package:cinema/features/common/async_view.dart';
 import 'package:cinema/models/seat_map.dart';
+import 'package:cinema/router.dart';
 import 'package:cinema/state/booking.dart';
 import 'package:cinema/state/realtime.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 class SeatMapScreen extends ConsumerWidget {
   const SeatMapScreen({required this.screeningId, super.key});
@@ -59,6 +61,7 @@ class SeatMapScreen extends ConsumerWidget {
           live: live,
           controller: ref.read(seatSelectionProvider(screeningId).notifier),
           onReload: () => ref.invalidate(seatSelectionProvider(screeningId)),
+          onCheckout: () => context.push(Routes.checkout(screeningId)),
         ),
       ),
     );
@@ -71,12 +74,16 @@ class _Loaded extends StatelessWidget {
     required this.live,
     required this.controller,
     required this.onReload,
+    required this.onCheckout,
   });
 
   final SeatSelectionState state;
   final RealtimeStatus live;
   final SeatSelection controller;
   final VoidCallback onReload;
+
+  /// Przejście na ekran podsumowania i płatności.
+  final VoidCallback onCheckout;
 
   @override
   Widget build(BuildContext context) {
@@ -86,7 +93,8 @@ class _Loaded extends StatelessWidget {
       children: <Widget>[
         _Header(state: state),
         RealtimeWarning(status: live, onRefresh: onReload),
-        if (state.cart.pendingBooking != null) const _PendingPayment(),
+        if (state.cart.pendingBooking != null)
+          _PendingPayment(onResume: onCheckout),
         if (state.notice case final SelectionNotice notice)
           _Notice(notice: notice, onClose: controller.dismissNotice),
         SeatLegend(prices: state.map.screening.prices),
@@ -110,7 +118,14 @@ class _Loaded extends StatelessWidget {
             ),
           ),
         ),
-        CartBar(state: state, onClear: controller.clear, onExpired: onReload),
+        CartBar(
+          state: state,
+          onClear: controller.clear,
+          onExpired: onReload,
+          // Przy rozpoczętej płatności do niej prowadzi pasek nad planem, więc
+          // paska koszyka nie obciążamy drugim takim samym przyciskiem.
+          onCheckout: state.cart.pendingBooking == null ? onCheckout : null,
+        ),
       ],
     );
   }
@@ -186,7 +201,12 @@ class _Notice extends StatelessWidget {
 
 /// Rozpoczęta płatność zamraża plan sali (stan podaje serwer w koszyku).
 class _PendingPayment extends StatelessWidget {
-  const _PendingPayment();
+  const _PendingPayment({required this.onResume});
+
+  /// Powrót do rozpoczętej płatności. Bez tego przycisku klient widziałby
+  /// zamrożony plan sali i nie miałby stąd żadnego wyjścia — a rezerwacja
+  /// czeka na pieniądze tylko kilka minut.
+  final VoidCallback onResume;
 
   @override
   Widget build(BuildContext context) {
@@ -194,11 +214,23 @@ class _PendingPayment extends StatelessWidget {
     return Container(
       width: double.infinity,
       color: colors.tertiaryContainer,
-      padding: const EdgeInsets.all(12),
-      child: Text(
-        'Płatność za te miejsca jest już rozpoczęta. Do jej zakończenia '
-        'planu sali nie można zmieniać.',
-        style: TextStyle(color: colors.onTertiaryContainer),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            'Płatność za te miejsca jest już rozpoczęta. Do jej zakończenia '
+            'planu sali nie można zmieniać.',
+            style: TextStyle(color: colors.onTertiaryContainer),
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              onPressed: onResume,
+              child: const Text('Wróć do płatności'),
+            ),
+          ),
+        ],
       ),
     );
   }

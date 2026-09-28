@@ -29,6 +29,17 @@ final Provider<BookingRepository> bookingRepositoryProvider =
       (Ref ref) => BookingRepository(ref.watch(apiClientProvider)),
     );
 
+/// Sam koszyk, BEZ planu sali.
+///
+/// Ekran podsumowania płatności potrzebuje miejsc i kwoty, a nie całej sali.
+/// Gdyby wziął `seatSelectionProvider`, pobrałby przy okazji plan (w dużej sali
+/// setki foteli) i zasubskrybował kanał seansu drugi raz — obie rzeczy bez
+/// żadnego śladu na ekranie, za który klient płaci transferem.
+final cartProvider = FutureProvider.family<Cart, int>(
+  (Ref ref, int screeningId) =>
+      ref.watch(bookingRepositoryProvider).cart(screeningId),
+);
+
 /// Komunikat dla użytkownika po odrzuconym wyborze.
 ///
 /// Jeden kształt dla komunikatów serwera (409, 422) i dla tych, które aplikacja

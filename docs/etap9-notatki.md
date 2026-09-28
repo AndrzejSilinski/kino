@@ -764,3 +764,71 @@ powstaje po `start()`, a pierwsze zdarzenie, na jakie wolno liczyć, to już roz
 Osobno warto pamiętać, że to kanał WŁAŚCICIELA: podpis idzie przez `ApiClient`, czyli z tokenem
 Sanctum, i `BookingPolicy::listen` odmówi każdemu innemu — więc kupujący bez konta nie zobaczy
 tu niczego, w przeciwieństwie do kanału planu sali.
+
+## Blok H3 — ekran podsumowania i płatności
+
+### Decyzje
+
+**319. Ekran płatności bierze SAM KOSZYK, a nie stan wyboru miejsc.** Najprościej byłoby sięgnąć
+po `seatSelectionProvider` — jest już gotowy i ma w sobie koszyk. Kosztowałoby to jednak pobranie
+całego planu sali (w dużej sali kilkaset foteli z cenami i kategoriami) oraz drugą subskrypcję
+kanału seansu, a na ekranie podsumowania nie ma po tym ani jednego śladu. Dlatego doszedł
+`cartProvider(screeningId)`: jedno żądanie po miejsca i kwotę. Przy okazji test pilnuje tego
+wprost — `expect(api.seatMapCalls, 0)`.
+
+**320. Przy konflikcie 409 przycisku „Przejdź do płatności” po prostu NIE MA.** Serwer odpowiedział,
+że płatność za te miejsca jest już rozpoczęta; gdyby klient kliknął ponownie, dostałby znów 409.
+Zamiast tego pokazujemy numer tamtej rezerwacji i zostawiamy jedno wyjście: „Zrezygnuj z płatności”.
+To jest ta sama zasada, co przy fotelach zajętych przez kogoś innego — element, który nie może się
+udać, nie ma być klikalny (decyzja 291). Ekran nie zgaduje przy tym, w jakim stanie jest tamta
+rezerwacja: pobiera ją przez REST i pokazuje etykietę z serwera, więc jeśli okaże się już opłacona,
+klient zobaczy „Opłacona”, a nie ofertę zapłacenia drugi raz.
+
+**321. Licznik okna płatności dochodzący do zera POBIERA rezerwację.** Sam licznik zatrzymany na
+0:00 zostawiłby na ekranie przycisk „Zapłać” do płatności, której serwer już nie przyjmie —
+a arkusz Stripe'a otwarty na wygasłej intencji to najgorszy możliwy moment na komunikat o błędzie.
+Dlatego `onExpired` woła `refreshBooking()`, a ekran pokazuje to, co naprawdę jest:
+„Wygasła” z etykietą serwera i przycisk powrotu do wyboru miejsc. Same sekundy liczymy od
+`expires_in_seconds` Z SERWERA, nie z różnicy dat na telefonie (decyzja 288).
+
+**322. Jedna akcja — jeden przycisk, nawet gdy pasują dwa miejsca.** Gdy na seansie jest rozpoczęta
+płatność, plan sali jest zamrożony i pasek nad nim mówi o tym wprost — tam doszedł przycisk „Wróć
+do płatności”. Wtedy pasek koszyka SWOJEGO przycisku nie pokazuje, choć technicznie mógłby
+(powtórzony checkout na niezmienionym koszyku oddaje 200 z tą samą rezerwacją). Dwa przyciski do
+tej samej rzeczy w dwóch miejscach jednego ekranu to gotowy sposób na kliknięcie nie w to, co się
+chciało — a tu kliknięcie kosztuje pieniądze. Przy pustym koszyku nie ma żadnego z nich: przycisk
+prowadzący do ekranu z komunikatem „koszyk jest pusty” jest gorszy niż brak przycisku.
+
+### Pułapki
+
+**DT. `ref.listen` warunkowo — ale warunek na WIDGECIE, nie na wywołaniu.** Kanał rezerwacji da się
+zasubskrybować tylko wtedy, gdy znamy numer (pułapka DS), więc nasłuch jest z natury warunkowy.
+Wsadzenie `if (reference != null) ref.listen(...)` do `build` ekranu byłoby proszeniem się o kłopot:
+`ref.listen` w `build` rejestruje nasłuch na nowo przy każdej przebudowie i lepiej, żeby robił to
+bezwarunkowo. Dlatego nasłuch siedzi w osobnym maleńkim widgecie (`_BookingChannel`), a warunkowe
+jest samo jego zamontowanie. Efekt jest ten sam, a `ref.listen` ma w swoim `build` dokładnie jedną
+drogę wykonania.
+
+**DU. Pola OPCJONALNE w kontrakcie wychodzą dopiero w widgecie — i dobrze, że w analizie.** Nazwa
+kategorii miejsca (`category.name`) jest w API opcjonalna, bo pochodzi ze słownika w panelu
+administracyjnym i może być pusta. W modelu jest więc `String?`, a ja wstawiłem ją wprost do
+`Text(...)`, który wymaga napisu. Pierwszy przebieg bloku stanął na tym po dziewięciu sekundach:
+`flutter analyze --fatal-infos` z trybami `strict-casts`, `strict-inference`
+i `strict-raw-types` (decyzja 260) zgłosił jeden błąd i wykonawca nie poszedł dalej. Warto
+zapamiętać dwie rzeczy. Pierwsza: to nie jest przypadek, że złapała to analiza, a nie telefon —
+bez trybów ścisłych `String?` przeszłoby jako `dynamic` i skończyłoby się wyjątkiem w widgecie
+u konkretnego klienta, którego miejsce nie ma kategorii. Druga: w pętli po elementach nie da się
+przypisać wartości do zmiennej, więc taki wiersz wyciągam do osobnego maleńkiego widgetu —
+tam `final String? category = ...` załatwia sprawę bez żadnego `!`.
+
+**DV. W testach widgetów TEKST JEST SZERSZY niż na telefonie — i dzięki temu wyszła prawdziwa
+wpadka układu.** Po dołożeniu przycisku „Do płatności” pasek koszyka zaczął wychodzić za ekran
+(`A RenderFlex overflowed by 114 pixels on the right`) i padło od razu pięć testów planu sali —
+wszystkie te, w których koszyk NIE jest pusty, czyli te, w których widać cenę, licznik i przyciski.
+Wygląda to na kaprys testu, ale nie jest: w testach widgetów Flutter używa własnej czcionki, w której
+każdy znak jest kwadratem o wysokości stopnia pisma, więc `1 × miejsce · 25,30 zł` zajmuje tam
+ponad 350 pikseli zamiast około 150. Test pokazał więc to, co zobaczyłby użytkownik wąskiego
+telefonu z większą czcionką systemową — a taki użytkownik istnieje. Poprawka jest w UKŁADZIE,
+nie w teście: informacje zostają w jednym wierszu (z `Expanded` na cenie), a przyciski schodzą
+do drugiego. Wniosek na stałe: „u mnie się mieści” nie jest argumentem, a overflow w teście
+widgetów traktuję jako błąd aplikacji, dopóki nie dowiodę, że to wina samego pomiaru.
