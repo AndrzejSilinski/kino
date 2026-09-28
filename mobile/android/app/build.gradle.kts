@@ -4,6 +4,19 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Etap 9, decyzja 292: google-services.json jest poza repozytorium, więc wtyczkę
+// Google Services stosujemy TYLKO wtedy, gdy plik istnieje. Bez niego build
+// przechodzi (przydatne w CI i przy pracy nad ekranami bez pusha), a aplikacja
+// po prostu nie rejestruje urządzenia FCM.
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+} else {
+    logger.lifecycle(
+        "Etap 9: brak android/app/google-services.json - wtyczka Google Services " +
+            "pominieta, push FCM nie bedzie dzialac w tym APK."
+    )
+}
+
 android {
     namespace = "pl.silinski.cinema"
     compileSdk = flutter.compileSdkVersion
@@ -12,6 +25,10 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // Wymaganie flutter_local_notifications: ta biblioteka używa API
+        // java.time, którego nie ma na starszych Androidach, więc kompilacja
+        // musi mieć włączone desugarowanie bibliotek standardowych.
+        isCoreLibraryDesugaringEnabled = true
     }
 
     defaultConfig {
@@ -31,11 +48,21 @@ android {
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            // Etap 9 buduje tylko debug APK. Podpis release i minifikacja
+            // wchodzą w Etapie 10 razem z CI; reguły dla Stripe i Fluttera
+            // leżą już w proguard-rules.pro, żeby ten krok był gotowy.
             signingConfig = signingConfigs.getByName("debug")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
+}
+
+dependencies {
+    // Wersja wymagana przez flutter_local_notifications (jej README).
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 kotlin {

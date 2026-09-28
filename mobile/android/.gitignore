@@ -1,5 +1,9 @@
 gradle-wrapper.jar
 /.gradle
+# Etap 9: wtyczka Kotlina trzyma tu pliki sesji kompilatora (artefakt buildu,
+# nie źródła). Szablon Fluttera tego nie ignoruje, a po każdym buildzie
+# zostawał nieśledzony plik blokujący strażnika czystego repozytorium.
+/.kotlin/
 /captures/
 /gradlew
 /gradlew.bat

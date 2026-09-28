@@ -1,0 +1,25 @@
+{
+  "data": {
+    "api_version": "v1",
+    "realtime": {
+      "broadcaster": "reverb",
+      "key": "testowyKluczReverba",
+      "path": "/app"
+    },
+    "booking": {
+      "seat_lock_ttl_seconds": 600,
+      "max_seats_per_session": 10,
+      "payment_window_seconds": 600
+    },
+    "push": {
+      "enabled": true,
+      "firebase": {
+        "api_key": "testowyKluczWebowy",
+        "app_id": "1:000000000000:web:0000000000000000000000",
+        "project_id": "kino-test",
+        "messaging_sender_id": "000000000000",
+        "vapid_public_key": "testowyKluczVapid"
+      }
+    }
+  }
+}

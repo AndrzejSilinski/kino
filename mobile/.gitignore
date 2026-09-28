@@ -46,3 +46,9 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# Etap 9, decyzja 292: konfiguracja Firebase dla Androida NIE trafia do gita.
+# Plik nie jest sekretem w sensie hasła, ale wiąże repozytorium z konkretnym
+# projektem Firebase i w CI (Etap 10) podstawiamy go z sekretu. Build bez tego
+# pliku działa — wtyczka Google Services jest wtedy pomijana, a push wyłączony.
+/android/app/google-services.json

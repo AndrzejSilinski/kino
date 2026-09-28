@@ -1,8 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Etap 9: szablon deklaruje INTERNET tylko w wariancie debug (tam
+         potrzebuje go narzędzie Fluttera). Aplikacja rozmawia z API także
+         w release, więc uprawnienie musi być w manifeście głównym. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <application
-        android:label="cinema"
+        android:label="Kino"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:fullBackupContent="false">
         <activity
             android:name=".MainActivity"
             android:exported="true"
