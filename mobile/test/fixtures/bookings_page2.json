@@ -1,0 +1,93 @@
+{
+  "data": [
+    {
+      "reference": "01M3MJ0000000000000000000E",
+      "status": "expired",
+      "status_label": "Wygasła",
+      "total": {
+        "amount": 2530,
+        "currency": "PLN",
+        "formatted": "25,30 zł"
+      },
+      "tickets_count": 0,
+      "created_at": "2026-09-27T10:00:00+00:00",
+      "paid_at": null,
+      "expires_at": "2026-09-27T10:10:00+00:00",
+      "screening": {
+        "id": 381,
+        "starts_at": "2026-09-28T21:30:00+02:00",
+        "ends_at": "2026-09-28T23:57:00+02:00",
+        "projection_type": "2d",
+        "projection_type_label": "2D",
+        "language_version": "subtitles",
+        "language_version_label": "Napisy polskie",
+        "status": "scheduled",
+        "is_bookable": false,
+        "movie": {
+          "id": 5,
+          "slug": "parasite",
+          "title": "Parasite",
+          "original_title": "Gisaengchung",
+          "description": "Opis filmu Parasite.",
+          "duration_minutes": 132,
+          "age_rating": "16",
+          "genres": [
+            "Dramat",
+            "Thriller"
+          ],
+          "premiere_date": null,
+          "poster_url": null
+        },
+        "hall": {
+          "id": 6,
+          "name": "Sala A",
+          "grid": {
+            "rows": 8,
+            "columns": 10
+          },
+          "projection_types": [
+            "2d",
+            "3d"
+          ],
+          "cinema": {
+            "id": 3,
+            "slug": "gdansk-kino-baltyk",
+            "name": "Kino Bałtyk",
+            "city": "Gdańsk",
+            "address": "ul. Długa 1",
+            "timezone": "Europe/Warsaw"
+          }
+        }
+      }
+    }
+  ],
+  "links": {
+    "first": "http://localhost:8080/api/v1/bookings?page=1",
+    "last": "http://localhost:8080/api/v1/bookings?page=2",
+    "prev": "http://localhost:8080/api/v1/bookings?page=1",
+    "next": null
+  },
+  "meta": {
+    "current_page": 2,
+    "from": 1,
+    "last_page": 2,
+    "links": [
+      {
+        "url": null,
+        "label": "&laquo; Previous",
+        "page": null,
+        "active": false
+      },
+      {
+        "url": "http://localhost:8080/api/v1/bookings?page=1",
+        "label": "1",
+        "page": 1,
+        "active": false
+      }
+    ],
+    "path": "http://localhost:8080/api/v1/bookings",
+    "per_page": 2,
+    "to": 1,
+    "total": 3
+  }
+}

@@ -1,0 +1,102 @@
+{
+  "data": {
+    "reference": "01M2R0FF9TF8JNNQ9GBNZJ3TDQ",
+    "status": "paid",
+    "status_label": "Opłacona",
+    "total": {
+      "amount": 5060,
+      "currency": "PLN",
+      "formatted": "50,60 zł"
+    },
+    "tickets_count": 2,
+    "created_at": "2026-09-28T18:00:11+00:00",
+    "paid_at": "2026-09-28T18:00:48+00:00",
+    "expires_at": "2026-09-28T18:10:11+00:00",
+    "screening": {
+      "id": 381,
+      "starts_at": "2026-09-28T21:30:00+02:00",
+      "ends_at": "2026-09-28T23:57:00+02:00",
+      "projection_type": "2d",
+      "projection_type_label": "2D",
+      "language_version": "subtitles",
+      "language_version_label": "Napisy polskie",
+      "status": "scheduled",
+      "is_bookable": false,
+      "movie": {
+        "id": 5,
+        "slug": "parasite",
+        "title": "Parasite",
+        "original_title": "Gisaengchung",
+        "description": "Opis filmu Parasite.",
+        "duration_minutes": 132,
+        "age_rating": "16",
+        "genres": [
+          "Dramat",
+          "Thriller"
+        ],
+        "premiere_date": null,
+        "poster_url": null
+      },
+      "hall": {
+        "id": 6,
+        "name": "Sala A",
+        "grid": {
+          "rows": 8,
+          "columns": 10
+        },
+        "projection_types": [
+          "2d",
+          "3d"
+        ],
+        "cinema": {
+          "id": 3,
+          "slug": "gdansk-kino-baltyk",
+          "name": "Kino Bałtyk",
+          "city": "Gdańsk",
+          "address": "ul. Długa 1",
+          "timezone": "Europe/Warsaw"
+        }
+      }
+    },
+    "tickets": [
+      {
+        "id": 9,
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "valid",
+        "status_label": "Ważny",
+        "validated_at": null,
+        "qr_url": "http://localhost:8080/api/v1/bookings/01M2R0FF9TF8JNNQ9GBNZJ3TDQ/tickets/9/qr",
+        "seat": {
+          "id": 103,
+          "row": "A",
+          "number": 3,
+          "label": "A3",
+          "type": "double"
+        }
+      },
+      {
+        "id": 10,
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "used",
+        "status_label": "Wykorzystany",
+        "validated_at": "2026-09-28T19:31:07+00:00",
+        "qr_url": "http://localhost:8080/api/v1/bookings/01M2R0FF9TF8JNNQ9GBNZJ3TDQ/tickets/10/qr",
+        "seat": {
+          "id": 104,
+          "row": "A",
+          "number": 4,
+          "label": "A4",
+          "type": "standard"
+        }
+      }
+    ]
+  }
+}

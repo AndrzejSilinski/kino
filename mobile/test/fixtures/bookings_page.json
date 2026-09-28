@@ -1,0 +1,157 @@
+{
+  "data": [
+    {
+      "reference": "01M2R0FF9TF8JNNQ9GBNZJ3TDQ",
+      "status": "paid",
+      "status_label": "Opłacona",
+      "total": {
+        "amount": 5060,
+        "currency": "PLN",
+        "formatted": "50,60 zł"
+      },
+      "tickets_count": 2,
+      "created_at": "2026-09-28T18:00:11+00:00",
+      "paid_at": "2026-09-28T18:00:48+00:00",
+      "expires_at": "2026-09-28T18:10:11+00:00",
+      "screening": {
+        "id": 381,
+        "starts_at": "2026-09-28T21:30:00+02:00",
+        "ends_at": "2026-09-28T23:57:00+02:00",
+        "projection_type": "2d",
+        "projection_type_label": "2D",
+        "language_version": "subtitles",
+        "language_version_label": "Napisy polskie",
+        "status": "scheduled",
+        "is_bookable": false,
+        "movie": {
+          "id": 5,
+          "slug": "parasite",
+          "title": "Parasite",
+          "original_title": "Gisaengchung",
+          "description": "Opis filmu Parasite.",
+          "duration_minutes": 132,
+          "age_rating": "16",
+          "genres": [
+            "Dramat",
+            "Thriller"
+          ],
+          "premiere_date": null,
+          "poster_url": null
+        },
+        "hall": {
+          "id": 6,
+          "name": "Sala A",
+          "grid": {
+            "rows": 8,
+            "columns": 10
+          },
+          "projection_types": [
+            "2d",
+            "3d"
+          ],
+          "cinema": {
+            "id": 3,
+            "slug": "gdansk-kino-baltyk",
+            "name": "Kino Bałtyk",
+            "city": "Gdańsk",
+            "address": "ul. Długa 1",
+            "timezone": "Europe/Warsaw"
+          }
+        }
+      }
+    },
+    {
+      "reference": "01M3MKPFCQXKE4XFCGX5HQEFM7",
+      "status": "cancelled",
+      "status_label": "Anulowana",
+      "total": {
+        "amount": 4370,
+        "currency": "PLN",
+        "formatted": "43,70 zł"
+      },
+      "tickets_count": 0,
+      "created_at": "2026-09-28T18:16:08+00:00",
+      "paid_at": null,
+      "expires_at": "2026-09-28T18:26:08+00:00",
+      "screening": {
+        "id": 381,
+        "starts_at": "2026-09-28T21:30:00+02:00",
+        "ends_at": "2026-09-28T23:57:00+02:00",
+        "projection_type": "2d",
+        "projection_type_label": "2D",
+        "language_version": "subtitles",
+        "language_version_label": "Napisy polskie",
+        "status": "scheduled",
+        "is_bookable": false,
+        "movie": {
+          "id": 5,
+          "slug": "parasite",
+          "title": "Parasite",
+          "original_title": "Gisaengchung",
+          "description": "Opis filmu Parasite.",
+          "duration_minutes": 132,
+          "age_rating": "16",
+          "genres": [
+            "Dramat",
+            "Thriller"
+          ],
+          "premiere_date": null,
+          "poster_url": null
+        },
+        "hall": {
+          "id": 6,
+          "name": "Sala A",
+          "grid": {
+            "rows": 8,
+            "columns": 10
+          },
+          "projection_types": [
+            "2d",
+            "3d"
+          ],
+          "cinema": {
+            "id": 3,
+            "slug": "gdansk-kino-baltyk",
+            "name": "Kino Bałtyk",
+            "city": "Gdańsk",
+            "address": "ul. Długa 1",
+            "timezone": "Europe/Warsaw"
+          }
+        }
+      },
+      "cancellation": {
+        "cancelled_at": "2026-09-28T18:19:02+00:00",
+        "refund": "none"
+      }
+    }
+  ],
+  "links": {
+    "first": "http://localhost:8080/api/v1/bookings?page=1",
+    "last": "http://localhost:8080/api/v1/bookings?page=2",
+    "prev": null,
+    "next": "http://localhost:8080/api/v1/bookings?page=2"
+  },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 2,
+    "links": [
+      {
+        "url": null,
+        "label": "&laquo; Previous",
+        "page": null,
+        "active": false
+      },
+      {
+        "url": "http://localhost:8080/api/v1/bookings?page=1",
+        "label": "1",
+        "page": 1,
+        "active": true
+      }
+    ],
+    "path": "http://localhost:8080/api/v1/bookings",
+    "per_page": 2,
+    "to": 2,
+    "total": 3
+  }
+}

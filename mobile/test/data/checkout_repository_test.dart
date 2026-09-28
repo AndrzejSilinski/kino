@@ -117,19 +117,9 @@ void main() {
     );
   });
 
-  test('szczegóły rezerwacji idą po reference, nie po numerze', () async {
-    final CheckoutRepository repository = repositoryFor(
-      (http.Request request) => json(envelope('booking_paid')),
-    );
-
-    final Booking booking = await repository.booking(
-      '01M3MK53H15CAMZB8DE9AFF06Q',
-    );
-
-    expect(sent.single.method, 'GET');
-    expect(sent.single.url.path, '/api/v1/bookings/01M3MK53H15CAMZB8DE9AFF06Q');
-    expect(booking.status, BookingStatus.paid);
-  });
+  // Odczyt rezerwacji przeniósł się do BookingsRepository (decyzja 326), więc
+  // jego test stoi teraz obok tamtego repozytorium — jeden adres, jeden
+  // właściciel, jedno miejsce z testem.
 
   test('rezygnacja kasuje płatność, nie rezerwację', () async {
     final CheckoutRepository repository = repositoryFor(

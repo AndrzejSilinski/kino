@@ -832,3 +832,55 @@ telefonu z większą czcionką systemową — a taki użytkownik istnieje. Popra
 nie w teście: informacje zostają w jednym wierszu (z `Expanded` na cenie), a przyciski schodzą
 do drugiego. Wniosek na stałe: „u mnie się mieści” nie jest argumentem, a overflow w teście
 widgetów traktuję jako błąd aplikacji, dopóki nie dowiodę, że to wina samego pomiaru.
+
+## Blok I1 — historia zakupów i bilety: kontrakt i stan
+
+### Decyzje
+
+**323. Stronicujemy PO NUMERZE STRONY, nie po adresach z `links`.** Serwer podaje gotowe
+`links.next`, więc pójście za nim wygląda na rzecz oczywistą — i jest pułapką. Rozpoznanie fazy 4
+pokazało w tym polu dosłownie `http://localhost:8080/api/v1/bookings?page=3`, bo Laravel buduje te
+adresy z hosta, którym serwer widzi SIEBIE. Na telefonie `localhost` to telefon: żądanie nie tylko
+by nie doszło, ale trafiłoby w cokolwiek, co na urządzeniu nasłuchuje na tym porcie. Numer strony
+jest niezależny od hosta, a adres bazowy aplikacja zna z parametru buildu. Z `meta` bierzemy więc
+tylko `current_page`, `last_page`, `per_page` i `total`; listę guzików `meta.links` pomijamy, bo to
+element interfejsu wymyślony pod stronę w przeglądarce.
+
+**324. Obraz kodu QR pobieramy z nagłówkiem `Authorization`, a nie adresem w widgecie obrazka.**
+Rozpoznanie potwierdziło oba brzegi: z tokenem adres oddaje 9 kB PNG-a, bez tokenu 401
+`UNAUTHENTICATED`. Skoro adres sam nie jest przepustką, nie ma powodu, żeby wędrował po logach —
+a adres podpisany w `<img src>` trafiłby do logów nginx razem z podpisem. Serwer dokłada do obrazu
+`Cache-Control: private, no-store`, bo bilet to przepustka na salę. Nagłówki liczymy przy KAŻDYM
+pobraniu (klasa `TicketImageHeaders`), a nie raz w providerze: token żyje w obiekcie mutowalnym,
+o którego zmianie Riverpod nie wie, więc zapamiętana mapa po ponownym zalogowaniu podawałaby stary
+token. Objawiłoby się to pustym prostokątem w miejscu kodu — przy bramce na salę.
+
+**325. Nieudane DOCZYTANIE strony nie kasuje listy, którą użytkownik czyta.** `loadMore()` zwraca
+błąd wywołującemu, zamiast wstawiać go w stan providera. Gdyby wstawiał, jedno nieudane żądanie na
+końcu przewijania (a bilety mają ciasny limit 30 żądań na minutę) zamieniłoby dwadzieścia
+widocznych rezerwacji w komunikat o błędzie. Ekran pokazuje taki błąd paskiem u dołu i zostawia
+listę tam, gdzie była. To ta sama zasada co przy planie sali: awaria dodatku nie gasi treści.
+
+**326. Jeden adres API — jedno repozytorium.** `GET /bookings/{reference}` obsługiwał wcześniej
+`CheckoutRepository`, bo ścieżka płatności potrzebuje odczytu rezerwacji. Z chwilą powstania
+historii zakupów ten sam adres miałby dwóch właścicieli, czyli dwa miejsca do poprawienia, gdy
+zmieni się kontrakt. Odczyt przeniosłem do `BookingsRepository`, a stan płatności bierze go
+stamtąd. `CheckoutRepository` zostaje przy adresach, których nie ma nikt inny: checkout i DELETE
+podzasobu `payment`.
+
+### Pułapki
+
+**DW. Relacje WARUNKOWE w API Resource znikają z odpowiedzi w całości — model musi to znieść.**
+Laravelowe `whenLoaded` / `whenCounted` nie wstawiają `null`, tylko USUWAJĄ pole. Ten sam
+`BookingResource` obsługuje trzy trasy i daje trzy różne kształty: odpowiedź checkoutu bez seansu
+i bez biletów, lista rezerwacji z seansem i licznikiem ale bez biletów, szczegóły ze wszystkim.
+Mój model musi więc traktować `tickets_count`, `screening`, `tickets`, `qr_url` i `seat` jako
+opcjonalne — inaczej ekran historii wywracałby się na odpowiedzi, która jest w pełni poprawna.
+
+Przy okazji wyszła wada, którą wpisałem wcześniej sam: `ScreeningDetail` wymagał pola `prices`,
+a `ScreeningResource` dokłada cennik też warunkowo. Działało tylko dlatego, że dwie trasy, na
+których go używałem, ładowały tę relację. Seans w szczegółach rezerwacji cennika nie ma — i model
+padłby na pierwszym wejściu w bilet, choć odpowiedź jest poprawna. Teraz brak cennika daje pustą
+listę, a `cheapest` oddaje null, więc „od …” samo się nie pokazuje. Wniosek na stałe: przy modelu
+pisanym ręcznie sprawdzam w kodzie Resource'a, KTÓRE pola są warunkowe — z jednej odpowiedzi tego
+nie widać.

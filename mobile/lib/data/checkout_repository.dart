@@ -12,6 +12,11 @@
 //     w `context.booking_reference` przychodzi numer rezerwacji do powrotu,
 //   - 422 EMPTY_CART, gdy koszyk jest pusty,
 //   - 401, gdy nie ma tokenu (rezerwacja musi mieć właściciela).
+//
+// Odczytu rezerwacji tu NIE MA, choć ścieżka płatności go potrzebuje: adres
+// `/bookings/{reference}` należy do historii zakupów i ma jednego właściciela
+// — `BookingsRepository` (decyzja 326). Dwa repozytoria znające ten sam adres
+// to dwa miejsca do poprawienia, gdy zmieni się kontrakt.
 
 import 'package:cinema/core/api_client.dart';
 import 'package:cinema/models/booking.dart';
@@ -26,10 +31,6 @@ class CheckoutRepository {
   Future<Checkout> start(int screeningId) async => Checkout.fromJson(
     await _api.postJson('/screenings/$screeningId/booking'),
   );
-
-  /// Szczegóły rezerwacji — po nich poznajemy, czy pieniądze już doszły.
-  Future<Booking> booking(String reference) async =>
-      Booking.fromJson(await _api.getJson('/bookings/$reference'));
 
   /// Rezygnacja z rozpoczętej płatności.
   ///

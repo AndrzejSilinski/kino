@@ -16,11 +16,13 @@ import 'dart:async';
 
 import 'package:cinema/core/api_error.dart';
 import 'package:cinema/core/payment_sheet.dart';
+import 'package:cinema/data/bookings_repository.dart';
 import 'package:cinema/data/checkout_repository.dart';
 import 'package:cinema/models/booking.dart';
 import 'package:cinema/models/booking_event.dart';
 import 'package:cinema/models/checkout.dart';
 import 'package:cinema/state/booking.dart';
+import 'package:cinema/state/bookings.dart';
 import 'package:cinema/state/providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -112,6 +114,10 @@ class CheckoutController extends AsyncNotifier<CheckoutState> {
   final int screeningId;
 
   CheckoutRepository get _repo => ref.read(checkoutRepositoryProvider);
+
+  /// Odczyt rezerwacji należy do historii zakupów (decyzja 326), więc bierzemy
+  /// go stamtąd, zamiast dublować adres w dwóch repozytoriach.
+  BookingsRepository get _bookings => ref.read(bookingsRepositoryProvider);
 
   @override
   Future<CheckoutState> build() async {
@@ -213,7 +219,7 @@ class CheckoutController extends AsyncNotifier<CheckoutState> {
       return null;
     }
     try {
-      final Booking booking = await _repo.booking(key);
+      final Booking booking = await _bookings.details(key);
       _update((CheckoutState base) => base.copyWith(booking: booking));
       return booking;
     } on ApiError catch (error) {

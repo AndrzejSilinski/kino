@@ -279,7 +279,13 @@ class ScreeningDetail {
       isBookable: jsonBool(json, 'is_bookable', where),
       movie: MovieDetail.fromJson(jsonChild(json, 'movie', where)),
       hall: Hall.fromJson(jsonChild(json, 'hall', where)),
-      prices: jsonList(json['prices'], '$where.prices')
+      // Cennika może NIE BYĆ w odpowiedzi (pułapka DW). Serwer dokłada go
+      // warunkowo — tylko wtedy, gdy trasa załadowała relację. Ekran seansu
+      // i plan sali go dostają, ale seans w szczegółach rezerwacji już nie:
+      // tam cennik jest zbędny, bo klient zapłacił, a cena stoi przy bilecie.
+      // Pusta lista jest więc poprawną odpowiedzią, a `cheapest` oddaje wtedy
+      // null, więc „od …” samo się nie pokazuje.
+      prices: jsonList(json['prices'] ?? const <Object?>[], '$where.prices')
           .map((Object? item) => PriceEntry.fromJson(jsonMap(item, where)))
           .toList(growable: false),
     );
