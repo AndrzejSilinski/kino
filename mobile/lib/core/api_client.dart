@@ -85,6 +85,18 @@ class ApiClient {
   }) async =>
       _data(await _envelope('PATCH', path, body: body, headers: headers), path);
 
+  /// Odpowiedź BEZ koperty `data`.
+  ///
+  /// Jedyny taki endpoint w naszym API to `/broadcasting/auth`: zwraca surowe
+  /// `{"auth": "..."}`, bo tego wymaga protokół Pushera — tak samo jak dla
+  /// `pusher-js` w SPA. Wyjątek jest świadomy i opisany po stronie serwera;
+  /// pozostałe metody rozpakowują kopertę, żeby nikt nie sięgał po `data`
+  /// ręcznie.
+  Future<Map<String, Object?>> postWithoutEnvelope(
+    String path, {
+    Map<String, Object?>? body,
+  }) => _envelope('POST', path, body: body);
+
   Future<Map<String, Object?>> deleteJson(
     String path, {
     Map<String, String>? headers,

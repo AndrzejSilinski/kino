@@ -485,3 +485,94 @@ i nowa rzecz do tłumaczenia na rozmowie.
 sekundę wywołuje `setState`. Nie wiesza, bo MIĘDZY tyknięciami nie ma zaplanowanej klatki:
 `pumpAndSettle` dochodzi do stanu bez klatek i wychodzi. Czas w testach przesuwamy jawnie przez
 `pump(Duration(...))`, więc nic nie czeka na realny upływ sekundy.
+
+## Blok G1 — klient WebSocketa (protokół Pushera)
+
+### Decyzje
+
+**299. Klient protokołu Pushera piszemy ręcznie.** Serwerem jest Reverb, a z całego protokołu
+potrzebujemy pięciu komunikatów: `pusher:subscribe`, `pusher_internal:subscription_succeeded`,
+`pusher:ping`, `pusher:pong`, `pusher:error`. Gotowa paczka dołożyłaby zależność (często
+z kodem natywnym), a i tak trzeba by samemu napisać to, co naprawdę trudne: podpis kanału
+prywatnego z własnego API, ponawianie z narastającym odstępem i pobranie PEŁNEGO stanu sali po
+zerwaniu łącza. Kształt komunikatów nie jest przepisany z dokumentacji — potwierdziło go
+rozpoznanie fazy 2 na żywym Reverbie.
+
+**300. Wszystkie czasy klienta są PARAMETRAMI, a testy chodzą realnym zegarem w milisekundach.**
+Odstęp ciszy przed pingiem, okno na `pong` i pierwszy odstęp ponowienia to argumenty konstruktora
+(w produkcji 30 s, 10 s i 1 s; w testach 20-40 ms). Dzięki temu cały plik testów wykonuje się
+w kilkadziesiąt milisekund bez żadnego sterowanego zegara.
+
+To druga wersja tej decyzji. Pierwsza brzmiała „testy piszemy jako `testWidgets`, bo dają
+sterowany zegar bez nowej zależności” — i skończyła się dwoma testami wiszącymi po dziesięć minut
+(pułapka DL). Wniosek na przyszłość: zanim sięgnę po sterowany zegar, sprawdzam, czy nie wystarczy
+zrobić czasu parametrem. Wstrzyknięcie czasu jest prostsze, szybsze i nie zależy od tego, jak
+konkretna strefa testowa obsługuje timery i strumienie.
+
+**301. Gniazdo jest za interfejsem (`RealtimeSocket`), nie wołane wprost.** `web_socket_channel`
+zna tylko jeden plik (`realtime_socket.dart`). Cała logika protokołu testuje się bez serwera
+i bez sieci, a wymiana paczki nie dotyka logiki. To ten sam zabieg co z `SecureStore` w bloku D.
+
+**302. Po zerwaniu łącza NIE nakładamy zaległych zdarzeń — pobieramy pełny stan przez REST.**
+Nikt nam nie powtórzy zdarzeń z czasu, gdy telefon był w windzie, a `seats.changed` niesie stan
+absolutny tylko WYMIENIONYCH miejsc, nie całej sali. Dlatego klient ma osobny strumień
+`resubscribed`: ekran dostaje znak „odtworzyłem kanały, twój plan może być z innej epoki”
+i robi jedno żądanie REST. Tego wymaga wprost sekcja 1.3 zadania, i dlatego trasa planu sali
+nie ma limitu zapytań.
+
+**303. Ping wysyłamy sami po ciszy dłuższej niż `activity_timeout` z serwera** (u nas 30 s).
+Bez tego zerwane łącze — w tunelu `adb`, w sieci komórkowej, po uśpieniu telefonu — wygląda
+dokładnie jak spokojne połączenie bez zdarzeń. Plan sali jest wtedy nieaktualny, a klient wybiera
+miejsca, które ktoś już kupił. Brak `pong` w oknie 10 sekund traktujemy jak zerwanie.
+
+**304. Kody błędów Pushera 4000–4099 są ostateczne.** Zły klucz aplikacji albo nieobsługiwana
+wersja protokołu nie naprawią się przez ponawianie, więc klient zatrzymuje się i wystawia
+`fatalError`. Kody 4100+ (np. przeciążenie) ponawiamy normalnie.
+
+### Pułapki
+
+**DF. `fake_async` to osobna paczka.** Sterowany zegar w zwykłym `test()` wymagałby zależności
+w `pubspec.yaml`, a każda nowa zależność to wpis w `pubspec.lock`, który muszę wygenerować
+u siebie — a nie mam tam Fluttera. Ostatecznie żaden sterowany zegar nie był potrzebny: czasy
+są parametrami (decyzja 300).
+
+**DK. Zamknięcie martwego gniazda WebSocketa zgłasza `onDone` na subskrypcji, którą właśnie
+anulujemy.** Anulowanie jest asynchroniczne, więc zdarzenie zdąży dojść i wejść drugi raz
+w obsługę zerwania. Mój pierwszy strażnik (`gniazdo == null && timer != null`) tego nie łapał,
+bo timer ponowienia ustawiałem na KOŃCU metody — drugie wejście przechodziło i planowało kolejne
+ponowienie obok pierwszego, bez anulowania. Rozwiązanie to licznik generacji: każde gniazdo ma
+numer, a wszystko, co przychodzi ze starszego, jest ignorowane. Test „zerwanie otwiera dokładnie
+jedno nowe gniazdo” pilnuje tego na stałe.
+
+**DL. Test widgetów, który zawiśnie, kosztuje DZIESIĘĆ MINUT — tyle wynosi domyślny limit
+`package:test`.** Dwa takie testy w jednym pliku zamieniły 90-sekundowy przebieg bloku w 34 minuty,
+a siedem pozostałych testów w tym pliku w ogóle nie wystartowało (raport pokazał 121 testów wobec
+oczekiwanych 128 — i ta rozbieżność była pierwszym sygnałem, że to nie zwykły błąd asercji).
+Dwa wnioski, oba już wdrożone: krok testów w wykonawcy ma `timeout 900`, a raport wprost mówi,
+gdy limit zadziałał (pułapka DJ); klient czasu rzeczywistego testujemy bez strefy testów widgetów
+(decyzja 300).
+
+**DG. `data` w protokole Pushera bywa NAPISEM z JSON-em w środku.** Ramka wygląda tak:
+`{"event":"seats.changed","data":"{\"version\":5,…}","channel":"private-screenings.380"}`.
+Klient, który zakłada obiekt, dostanie napis i po cichu zignoruje zdarzenie. Obsługujemy oba
+kształty — rozpoznanie fazy 2 pokazywało `data` już rozpakowane, bo to skrypt je dekodował,
+i o taką pomyłkę byłoby tu bardzo łatwo.
+
+**DI. `collection-if` z porównaniem do `null` w literale mapy zawsze skończy się uwagą
+`use_null_aware_elements`.** To już trzecie spotkanie z tą regułą (bloki D, E, G1), więc nie
+poprawiam pojedynczego wystąpienia, tylko przestaję pisać ten wzorzec: mapę z opcjonalnymi
+polami składam imperatywnie (`if (x != null) map['k'] = …`). Znacznik `?` działa tylko wtedy, gdy
+wartość jest DOKŁADNIE tym samym wyrażeniem, które sprawdzamy — a w atrapach zwykle nie jest
+(`data is String ? data : jsonEncode(data)`), więc analizator i tak zgłasza uwagę, a poprawka
+znacznikiem nie ma jak wejść. Imperatywne złożenie mapy kończy temat raz na zawsze.
+
+**DH. `/broadcasting/auth` zwraca odpowiedź BEZ koperty `data`.** To świadomy wyjątek od
+konwencji API (opisany w kontrolerze na serwerze), bo takiego kształtu wymaga protokół Pushera
+— tak samo dla `pusher-js` w SPA jak dla klienta Fluttera. Dlatego `ApiClient` ma osobną metodę
+`postWithoutEnvelope`; pozostałe metody dalej rozpakowują kopertę, żeby nikt nie sięgał po `data`
+ręcznie.
+
+**DJ. Krok testów bez limitu czasu zamienia jeden błąd w pół godziny czekania.** Wykonawca
+uruchamia teraz `timeout 900 … flutter test --machine` i zapisuje w raporcie, gdy limit zadziałał.
+900 s to około dziesięciokrotność zdrowego przebiegu, więc poprawny zestaw nigdy tego nie dotknie,
+a zapętlony test kosztuje kwadrans, nie pół dnia.
