@@ -10,7 +10,7 @@
 //   - identyfikator sesji zakupowej wysyłamy i zapamiętujemy z KAŻDEJ
 //     odpowiedzi, bo to serwer go wydaje (decyzja 15).
 //
-// Multipart (avatar) dochodzi w bloku J.
+// Multipart (avatar): postMultipart niżej.
 
 import 'dart:async';
 import 'dart:convert';
@@ -119,6 +119,16 @@ class ApiClient {
       () => _request(method, uri, body, headers),
       path,
     );
+    return _envelopeOf(response, path);
+  }
+
+  /// Koperta z GOTOWEJ odpowiedzi: zapamiętanie sesji zakupowej, dekodowanie
+  /// i zamiana błędu na `ApiError`.
+  ///
+  /// Wydzielone z `_envelope`, bo multipart nie da się wysłać przez
+  /// `_request` (tam ciało jest napisem JSON), a nie chcę dwóch miejsc, które
+  /// wiedzą, jak wygląda błąd tego API.
+  Map<String, Object?> _envelopeOf(http.Response response, String path) {
     final String? sessionId = response.headers[_sessionHeaderLower];
     if (sessionId != null && sessionId.isNotEmpty) {
       session?.rememberBookingSessionId(sessionId);
@@ -169,6 +179,31 @@ class ApiClient {
       session?.onTokenRejected();
     }
     throw error;
+  }
+
+  /// POST multipart z jednym plikiem (avatar).
+  ///
+  /// Typu treści części NIE ustawiamy: wymagałby `MediaType` z http_parsera,
+  /// czyli zależności, której nie ma w `pubspec.yaml` (a `http_parser` jest
+  /// tylko zależnością przechodnią `http`). Nie jest potrzebny — Laravel
+  /// sprawdza regułę `mimes` po ZAWARTOŚCI pliku, a rozszerzenie bierze
+  /// z nazwy, którą podajemy sami.
+  Future<Map<String, Object?>> postMultipart(
+    String path, {
+    required String field,
+    required String filename,
+    required List<int> bytes,
+  }) async {
+    final Uri uri = config.apiUri(path);
+    final http.Response response = await _send(() async {
+      final http.MultipartRequest request = http.MultipartRequest('POST', uri)
+        ..headers.addAll(_headers(null))
+        ..files.add(
+          http.MultipartFile.fromBytes(field, bytes, filename: filename),
+        );
+      return http.Response.fromStream(await httpClient.send(request));
+    }, path);
+    return _data(_envelopeOf(response, path), path);
   }
 
   Future<http.Response> _request(

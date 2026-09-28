@@ -950,3 +950,41 @@ w każdym teście byłoby hałasem zaciemniającym intencję, więc testy tego e
 widok (`tester.view.physicalSize`) i mówią tym wprost: chcę widzieć CAŁY ekran. Wniosek na stałe:
 gdy test ekranu nie widzi czegoś, co „na pewno tam jest", najpierw sprawdzam, czy to nie leży
 poniżej 600. piksela.
+
+## Blok J1 — konto: kontrakt, multipart i stan
+
+### Decyzje
+
+**331. Dane zalogowanego konta mają JEDNO miejsce — stan logowania.** Notifier ekranu konta trzyma
+wyłącznie to, co dotyczy trwającej operacji (która idzie, jaki komunikat pokazać), a każdą udaną
+zmianę wpisuje do `authProvider` PEŁNYM profilem z odpowiedzi serwera. Gdyby trzymał własną kopię
+użytkownika, po zmianie nazwy ekran konta pokazywałby nową, a kółko z inicjałem w nagłówku starą —
+i żaden test jednego ekranu by tego nie złapał, bo każdy z osobna byłby poprawny. Po zmianie NIE
+pytamy serwera o `/auth/me`: wszystkie trzy trasy (nazwa, avatar, usunięcie avatara) oddają pełny
+`UserResource`, a limit `account` jest liczony per użytkownik, więc drugie żądanie po to samo
+zużywałoby go bez powodu.
+
+**332. Mówimy wprost, ile INNYCH urządzeń wylogowała zmiana hasła.** Serwer zwraca
+`revoked_tokens`, bo unieważnia pozostałe tokeny, zostawiając ten, na którym pracujemy. Łatwo to
+pole zignorować — i byłoby to zmarnowanie najważniejszej informacji w całej tej operacji: klient,
+który zmienia hasło, bo podejrzewa, że ktoś ma dostęp do jego konta, chce wiedzieć, że sesje
+tamtego kogoś właśnie przepadły. Komunikat składamy z tekstu serwera plus liczby, z odmianą przez
+liczbę pojedynczą i mnogą, bo „Wylogowano 1 innych urządzeń" wygląda jak błąd aplikacji.
+
+**333. Multipart wysyłamy BEZ typu treści części.** Ustawienie go wymagałoby `MediaType`
+z http_parsera — a ten jest tylko zależnością PRZECHODNIĄ paczki `http`, więc jawny import
+złamałby `depend_on_referenced_packages`, a dopisanie do `pubspec.yaml` zmieniłoby `pubspec.lock`,
+którego wykonawca pilnuje flagą `--enforce-lockfile`. I nie jest potrzebny: Laravel sprawdza regułę
+`mimes` po ZAWARTOŚCI pliku, a rozszerzenie bierze z nazwy, którą podajemy sami (`avatar.jpg`).
+Przy okazji wydzieliłem z klienta API obsługę gotowej odpowiedzi (`_envelopeOf`), żeby multipart
+nie miał własnej kopii wiedzy o tym, jak wygląda błąd tego API — test pilnuje, że token jedzie
+w nagłówku także tutaj, bo byłoby to jedyne żądanie, które mogłoby go zgubić.
+
+**334. Zdjęcie MUSIMY zmniejszyć przed wysłaniem — to warunek, nie optymalizacja.** Serwer przyjmuje
+jpg/png do 5 MB, nie mniejsze niż 128×128 i nie większe niż 16 Mpx, a potem kadruje do kwadratu
+256×256. Zdjęcie z aparatu w telefonie ma dziś 12 Mpx i regularnie przekracza 5 MB, więc bez
+zmniejszenia po stronie aplikacji wgranie avatara kończyłoby się komunikatem walidatora u ludzi
+z lepszym aparatem — czyli u tych, którzy mają najlepsze zdjęcia. Skoro serwer i tak zejdzie do
+256 pikseli, aplikacja wyśle około 512 — z zapasem nad minimum i z plikiem rzędu dziesiątek
+kilobajtów. Samo zmniejszanie (i aparat) to blok J2; tutaj zapisuję warunek, bo wynika z kontraktu,
+a nie z wygody.

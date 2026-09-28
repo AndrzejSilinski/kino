@@ -108,6 +108,19 @@ class AuthController extends Notifier<AuthState> {
     state = const AuthState(status: AuthStatus.anonymous);
   }
 
+  /// Podmiana danych zalogowanego konta bez pytania serwera o `/auth/me`.
+  ///
+  /// Zmiany konta (nazwa, avatar) oddają w odpowiedzi PEŁNY profil, więc drugie
+  /// żądanie po to samo byłoby marnotrawstwem — a przy limicie `account` per
+  /// użytkownik także zużyciem limitu bez powodu. Wywołanie ignorujemy, gdy nikt
+  /// nie jest zalogowany: stan konta nie ma wtedy czego opisywać.
+  void applyUser(User user) {
+    if (state.status != AuthStatus.authenticated) {
+      return;
+    }
+    state = AuthState(status: AuthStatus.authenticated, user: user);
+  }
+
   Future<bool> _run(Future<AuthResult> Function() action) async {
     state = AuthState(status: state.status, user: state.user, busy: true);
     try {
