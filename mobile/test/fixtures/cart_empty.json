@@ -1,0 +1,18 @@
+{
+  "data": {
+    "seats": [],
+    "seats_count": 0,
+    "total": {
+      "amount": 0,
+      "currency": "PLN",
+      "formatted": "0,00 zł"
+    },
+    "expires_at": null,
+    "expires_in_seconds": null,
+    "pending_booking": null
+  },
+  "meta": {
+    "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "screening_id": 380
+  }
+}

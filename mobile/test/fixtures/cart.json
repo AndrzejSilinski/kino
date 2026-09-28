@@ -1,0 +1,37 @@
+{
+  "data": {
+    "seats": [
+      {
+        "seat_id": 103,
+        "row": "A",
+        "number": 3,
+        "label": "A3",
+        "type": "standard",
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "lock_expires_at": "2026-09-28T15:40:52+00:00"
+      }
+    ],
+    "seats_count": 1,
+    "total": {
+      "amount": 2530,
+      "currency": "PLN",
+      "formatted": "25,30 zł"
+    },
+    "expires_at": "2026-09-28T15:40:52+00:00",
+    "expires_in_seconds": 540,
+    "pending_booking": null
+  },
+  "meta": {
+    "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "screening_id": 380
+  }
+}

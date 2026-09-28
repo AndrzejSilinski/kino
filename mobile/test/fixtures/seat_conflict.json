@@ -1,0 +1,12 @@
+{
+  "message": "Miejsca A4 zostały właśnie zajęte przez kogoś innego.",
+  "code": "SEATS_UNAVAILABLE",
+  "context": {
+    "seat_ids": [
+      104
+    ],
+    "seats": [
+      "A4"
+    ]
+  }
+}

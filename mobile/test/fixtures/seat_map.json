@@ -1,0 +1,302 @@
+{
+  "data": {
+    "screening": {
+      "id": 380,
+      "starts_at": "2026-09-28T18:00:00+02:00",
+      "ends_at": "2026-09-28T21:04:00+02:00",
+      "projection_type": "2d",
+      "projection_type_label": "2D",
+      "language_version": "subtitles",
+      "language_version_label": "Napisy polskie",
+      "status": "scheduled",
+      "is_bookable": true,
+      "movie": {
+        "id": 4,
+        "slug": "interstellar",
+        "title": "Interstellar",
+        "original_title": "Interstellar",
+        "description": "Opis filmu Interstellar.",
+        "duration_minutes": 169,
+        "age_rating": "12",
+        "genres": [
+          "Sci-Fi",
+          "Dramat"
+        ],
+        "premiere_date": null,
+        "poster_url": null
+      },
+      "hall": {
+        "id": 9,
+        "name": "Sala B",
+        "grid": {
+          "rows": 2,
+          "columns": 4
+        },
+        "projection_types": [
+          "2d",
+          "3d"
+        ],
+        "cinema": {
+          "id": 3,
+          "slug": "gdansk-kino-baltyk",
+          "name": "Kino Bałtyk",
+          "city": "Gdańsk",
+          "address": "al. Grunwaldzka 82",
+          "timezone": "Europe/Warsaw"
+        }
+      },
+      "prices": [
+        {
+          "category": {
+            "id": 1,
+            "slug": "standardowe",
+            "name": "Standardowe",
+            "color": "#4B5563"
+          },
+          "price": {
+            "amount": 2530,
+            "currency": "PLN",
+            "formatted": "25,30 zł"
+          }
+        },
+        {
+          "category": {
+            "id": 2,
+            "slug": "ulgowe",
+            "name": "Ulgowe",
+            "color": "#2563EB"
+          },
+          "price": {
+            "amount": 1900,
+            "currency": "PLN",
+            "formatted": "19,00 zł"
+          }
+        },
+        {
+          "category": {
+            "id": 5,
+            "slug": "dla-niepelnosprawnych",
+            "name": "Miejsce dla osób z niepełnosprawnością",
+            "color": "#059669"
+          },
+          "price": {
+            "amount": 1840,
+            "currency": "PLN",
+            "formatted": "18,40 zł"
+          }
+        }
+      ]
+    },
+    "seats": [
+      {
+        "id": 101,
+        "row": "A",
+        "number": 1,
+        "label": "A1",
+        "type": "accessible",
+        "type_label": "Miejsce dla osoby z niepełnosprawnością",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "category": {
+          "id": 5,
+          "name": "Miejsce dla osób z niepełnosprawnością",
+          "color": "#059669"
+        },
+        "price": {
+          "amount": 1840,
+          "currency": "PLN",
+          "formatted": "18,40 zł"
+        },
+        "status": "free",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 102,
+        "row": "A",
+        "number": 2,
+        "label": "A2",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 1,
+          "y": 0
+        },
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "free",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 103,
+        "row": "A",
+        "number": 3,
+        "label": "A3",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 2,
+          "y": 0
+        },
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "held_by_you",
+        "lock_expires_at": "2026-09-28T15:40:52+00:00",
+        "lock_expires_in_seconds": 540
+      },
+      {
+        "id": 104,
+        "row": "A",
+        "number": 4,
+        "label": "A4",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 3,
+          "y": 0
+        },
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "held",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 105,
+        "row": "B",
+        "number": 1,
+        "label": "B1",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 0,
+          "y": 1
+        },
+        "category": {
+          "id": 2,
+          "name": "Ulgowe",
+          "color": "#2563EB"
+        },
+        "price": {
+          "amount": 1900,
+          "currency": "PLN",
+          "formatted": "19,00 zł"
+        },
+        "status": "sold",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 106,
+        "row": "B",
+        "number": 2,
+        "label": "B2",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 1,
+          "y": 1
+        },
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "unavailable",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 107,
+        "row": "B",
+        "number": 3,
+        "label": "B3",
+        "type": "standard",
+        "type_label": "Miejsce standardowe",
+        "position": {
+          "x": 2,
+          "y": 1
+        },
+        "category": {
+          "id": null,
+          "name": null,
+          "color": null
+        },
+        "price": null,
+        "status": "free",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      },
+      {
+        "id": 108,
+        "row": "B",
+        "number": 4,
+        "label": "B4",
+        "type": "double",
+        "type_label": "Miejsce podwójne (love seat)",
+        "position": {
+          "x": 3,
+          "y": 1
+        },
+        "category": {
+          "id": 1,
+          "name": "Standardowe",
+          "color": "#4B5563"
+        },
+        "price": {
+          "amount": 2530,
+          "currency": "PLN",
+          "formatted": "25,30 zł"
+        },
+        "status": "free",
+        "lock_expires_at": null,
+        "lock_expires_in_seconds": null
+      }
+    ],
+    "summary": {
+      "free": 4,
+      "held": 1,
+      "held_by_you": 1,
+      "sold": 1,
+      "unavailable": 1,
+      "total": 8
+    },
+    "seat_state_version": 7
+  },
+  "meta": {
+    "session_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "generated_at": "2026-09-28T17:30:51+02:00"
+  }
+}

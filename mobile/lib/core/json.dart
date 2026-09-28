@@ -50,6 +50,19 @@ int jsonInt(Map<String, Object?> map, String key, String where) {
   throw ApiError.malformedResponse('$where.$key');
 }
 
+/// Liczba albo `null` — np. `lock_expires_in_seconds` przy cudzej blokadzie
+/// i `category.id` przy miejscu bez kategorii cenowej.
+int? jsonIntOrNull(Map<String, Object?> map, String key, String where) {
+  final Object? value = map[key];
+  if (value == null) {
+    return null;
+  }
+  if (value is int) {
+    return value;
+  }
+  throw ApiError.malformedResponse('$where.$key');
+}
+
 bool jsonBool(Map<String, Object?> map, String key, String where) {
   final Object? value = map[key];
   if (value is bool) {

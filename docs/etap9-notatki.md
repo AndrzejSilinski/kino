@@ -352,3 +352,78 @@ dymny wywalił blok, mimo że trasa działa i przechodzą ją testy widgetów. W
 się po zajrzeniu do gotowego pliku, a nie z pamięci o tym, jak ścieżka wygląda po złożeniu.
 Przy okazji sprawdzamy też ograniczenia parametrów (`[a-z0-9-]+`, `\d+`) — to one pilnują, żeby
 adres z powiadomienia albo z linku nie wpuścił do aplikacji śmieci.
+
+## Blok F — plan sali i koszyk (REST)
+
+Rozpoznanie fazy 2 (`etap9_R2_api.txt`, 33 sprawdzenia, 0 błędów) potwierdziło na żywym serwerze
+cały kontrakt koszyka: kształt planu sali, kształt koszyka, konflikt 409 z listą miejsc, kody
+błędów walidacji, zachowanie sesji zakupowej, niezależność limitu 30/min per sesja oraz payload
+zdarzenia `seats.changed`. Poniższe decyzje wynikają z tego, co serwer naprawdę robi, a nie
+z tego, jak go pamiętałem.
+
+### Decyzje
+
+**284. Nieznany status miejsca to `unavailable`, nie wyjątek.** Serwer zna dziś pięć statusów
+(`free`, `held`, `held_by_you`, `sold`, `unavailable`). Gdyby doszedł szósty, aplikacja w starej
+wersji ma pokazać plan sali z jednym fotelem nie do kupienia, a nie ekran błędu. Bezpieczny
+domyślny wybór przy nieznanej wartości to zawsze „nie wolno sprzedać”. Uwaga: to jedyne miejsce,
+gdzie odstępujemy od zasady „nieznany kształt = INVALID_RESPONSE” — bo tu chodzi o WARTOŚĆ pola
+o znanym typie, a nie o brakujące pole.
+
+**285. O MOICH miejscach rozstrzyga koszyk, o cudzych plan sali.** Rozpoznanie pokazało, że
+zdarzenie `seats.changed` opisuje moje miejsca jako `held` — i słusznie, bo payload nie może
+zależeć od tego, kto słucha (inaczej zdradzałby cudzy koszyk). Gdyby ekran malował status wprost
+ze zdarzenia, po cudzym kliknięciu moje fotele zmieniłyby kolor na „zajęte przez kogoś innego”.
+Dlatego identyfikatory z koszyka mają pierwszeństwo. To samo rozwiązuje drugi przypadek: po
+zwolnieniu miejsca plan sali z REST-a wciąż pamięta moją blokadę, a koszyk już nie — fotel
+pokazujemy jako wolny, bez ponownego pobierania planu.
+
+**286. Miejsca odrzucone przez 409 malujemy z `context.seat_ids`.** Serwer przysyła listę zajętych
+foteli właśnie po to, żeby klient nie musiał pobierać całego planu sali. Wykorzystujemy to: 409
+nie jest komunikatem „coś się nie udało”, tylko informacją, którą nakładamy na plan.
+
+**287. Koszyk zawsze bierzemy z ODPOWIEDZI, nigdy z domysłu.** Każda operacja (GET, POST, DELETE
+jednego miejsca, DELETE całości) zwraca pełny koszyk z wyceną. Blokada jest all-or-nothing, więc
+optymistyczne dodanie miejsca do koszyka byłoby błędne w każdym przypadku konfliktu. Podnosimy
+tylko znacznik „w trakcie” na jednym fotelu, a stan zastępujemy tym, co przyszło z serwera.
+
+**288. Czas koszyka odliczamy z `expires_in_seconds`, nie z różnicy dat.** Zegar telefonu bywa
+przestawiony, a `lock_expires_at` przychodzi w UTC (pułapka CY). Datą klient się resynchronizuje,
+sekundami odlicza — dokładnie tak, jak to opisuje kontrakt serwera.
+
+**289. Żadnych automatycznych ponowień na blokadach.** Limit to 30 żądań na minutę liczonych
+sesją zakupową, a rozpoznanie potwierdziło, że zużywają go także odpowiedzi odrzucone (`Remaining`
+spada przy 422). Ciche powtórki po 409 czy 422 wyczerpałyby limit dokładnie w momencie premiery.
+Ponowienie jest zawsze kliknięciem użytkownika.
+
+**290. Rodzina providerów Riverpoda 3 przekazuje argument KONSTRUKTOREM.** Sprawdzone w źródle
+wersji 3.4.3, nie w poradnikach: `AsyncNotifierProvider.family<NotifierT, StateT, ArgT>` przyjmuje
+`NotifierT Function(ArgT)`, a `build()` jest bezargumentowe. Klas `FamilyAsyncNotifier` z wersji 2
+w ogóle już nie ma (pułapka DB).
+
+**291. Plan sali pobieramy PRZED koszykiem.** Trasa planu sali nie ma limitu zapytań (celowo — po
+zerwaniu WebSocketa klient dobiera pełny stan przez REST) i to ona wydaje sesję zakupową, gdy
+aplikacja jeszcze jej nie ma. Odwrotna kolejność zużywałaby limit blokad na samo wydanie sesji.
+
+### Pułapki
+
+**CY. Jeden kontrakt, dwie strefy czasowe.** Godziny seansu przychodzą w strefie kina
+(`+02:00`), a czasy blokad koszyka w UTC (`2026-09-28T15:40:52+00:00`). Oba zapisy są poprawne
+i wskazują ten sam moment, ale gdyby ktoś wyświetlił `lock_expires_at` przez `wallClock`,
+pokazałby klientowi godzinę o dwie mniejszą. Do odliczania służy `expires_in_seconds`.
+
+**CZ. POST blokady bez nagłówka `X-Session-Id` KOŃCZY SIĘ SUKCESEM.** Serwer wydaje nową sesję
+i przypisuje jej blokadę — 201, pełny koszyk, wszystko w porządku, tylko że aplikacja nie wie,
+w czyim koszyku wylądowało miejsce. Dlatego identyfikator z nagłówka odpowiedzi zapamiętujemy
+w kliencie API (blok D) i nie polegamy na tym, że „i tak zwykle jest”.
+
+**DA. Odpowiedź 422 `INVALID_SESSION_ID` nie ma ani nagłówka `X-Session-Id`, ani pól `context`
+i `errors`.** Middleware rzuca wyjątek, zanim ustawi nagłówek. Dwa wnioski: parser błędów musi
+znosić brak tych pól (znosi — `ApiError.fromBody` wymaga tylko `code` i `message`), a klient nie
+może na podstawie takiej odpowiedzi „zapomnieć” swojej sesji.
+
+**DB. Riverpod 3 nie ma klas `FamilyNotifier`/`FamilyAsyncNotifier`, a setter `state` jest
+`@protected`.** Pierwsze oznacza, że argument rodziny wchodzi konstruktorem (decyzja 290). Drugie,
+że test NIE może podstawić stanu notifierowi z zewnątrz, mimo adnotacji `@visibleForTesting` —
+stan trzeba ustawić przez atrapę serwera (u nas: podmieniony `max_seats_per_session`
+w `client-config`). Wyszło to, zanim kosztowało przebieg: sprawdziłem źródło wersji 3.4.3.

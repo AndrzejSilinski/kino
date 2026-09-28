@@ -26,6 +26,17 @@ class ApiError implements Exception {
   static const String tooManyRequests = 'TOO_MANY_REQUESTS';
   static const String serverError = 'SERVER_ERROR';
 
+  /// Kody koszyka, potwierdzone rozpoznaniem na żywym serwerze.
+  ///
+  /// `SEATS_UNAVAILABLE` (409) niesie w `context.seat_ids` fotele zajęte przez
+  /// kogoś innego. `SEATS_NOT_IN_HALL` (422, nie 404!) dostajemy zarówno dla
+  /// nieistniejącego identyfikatora, jak i dla miejsca z innej sali — dla
+  /// aplikacji znaczy to „mój plan sali jest nieaktualny”.
+  /// `INVALID_SESSION_ID` (422) to zły format nagłówka `X-Session-Id`.
+  static const String seatsUnavailable = 'SEATS_UNAVAILABLE';
+  static const String seatsNotInHall = 'SEATS_NOT_IN_HALL';
+  static const String invalidSessionId = 'INVALID_SESSION_ID';
+
   /// Kody, których serwer nie zna — powstają tylko po stronie aplikacji.
   static const String networkError = 'NETWORK_ERROR';
   static const String invalidResponse = 'INVALID_RESPONSE';
@@ -95,6 +106,17 @@ class ApiError implements Exception {
       }
     });
     return out;
+  }
+
+  /// Identyfikatory miejsc z `context.seat_ids` — przy 409 to fotele zajęte
+  /// przez kogoś innego, przy `SEATS_NOT_IN_HALL` te, których serwer nie zna
+  /// w tej sali. Pusta lista, gdy pola nie ma.
+  List<int> get seatIds {
+    final Object? raw = context['seat_ids'];
+    if (raw is! List) {
+      return const <int>[];
+    }
+    return raw.whereType<int>().toList(growable: false);
   }
 
   /// Pierwszy komunikat walidacji dla pola formularza albo null.
