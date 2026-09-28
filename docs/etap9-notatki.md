@@ -427,3 +427,61 @@ może na podstawie takiej odpowiedzi „zapomnieć” swojej sesji.
 że test NIE może podstawić stanu notifierowi z zewnątrz, mimo adnotacji `@visibleForTesting` —
 stan trzeba ustawić przez atrapę serwera (u nas: podmieniony `max_seats_per_session`
 w `client-config`). Wyszło to, zanim kosztowało przebieg: sprawdziłem źródło wersji 3.4.3.
+
+## Blok F2 — ekran planu sali
+
+### Decyzje
+
+**292. Jedno miejsce na zamianę `#RRGGBB` na kolor.** Kolory kategorii cenowych ustawia
+administrator w panelu, więc aplikacja ich nie zna z góry. Pokazuje je teraz cennik seansu, fotele
+na planie i legenda planu — trzy ekrany, jedna funkcja `colorFromHex` z kolorem zapasowym
+z motywu. Zły albo pusty zapis nie może wywrócić ekranu: sala rysuje się dalej, tylko obwódki są
+w kolorze domyślnym.
+
+**293. Plan sali jest skalowalny (`InteractiveViewer`), a nie ściśnięty do szerokości ekranu.**
+Sala na 300 miejsc w 20 kolumnach nie zmieści się czytelnie na telefonie: albo fotele robią się
+za małe do trafienia palcem, albo plan wychodzi za ekran. `constrained: false` pozwala siatce być
+większą niż widok, a powiększanie dwoma palcami i przesuwanie rozwiązują resztę bez własnej
+matematyki. Rozmiar planu jest policzalny z góry (stały bok fotela razy liczba kolumn), więc nie
+potrzeba pomiarów w czasie działania.
+
+**294. Fotele rysujemy po WSPÓŁRZĘDNYCH, nie po kolejności listy.** Sala ma przejścia, więc
+miejsce numer 8 może stać w kolumnie 9. Serwer podaje `position.x`, `position.y` i wymiary siatki
+(`hall.grid`) właśnie dlatego. Rysowanie „jeden fotel po drugim” dałoby plan, który nie zgadza się
+z salą — a klient wybiera miejsce patrząc na kształt sali, nie na numerację.
+
+**295. Komunikat po odrzuconym wyborze to pasek nad planem, nie „snackbar”.** Przy 409
+użytkownik ma równocześnie przeczytać komunikat i zobaczyć, że fotel zmienił kolor na zajęty.
+Powiadomienie, które samo znika po trzech sekundach, gubi połowę tej informacji. Pasek ma
+przycisk zamknięcia i zostaje, dopóki użytkownik go nie zamknie albo nie zrobi czegoś innego.
+
+**296. Wolne miejsce BEZ CENY zostaje klikalne.** Blokada i tak by się nie udała (serwer odmawia,
+bo kategoria nie ma ceny w cenniku seansu), ale fotel wygląda na wolny, więc klient w niego
+kliknie. Ekran, który na kliknięcie milczy, wygląda na zepsuty. Kliknięcie kończy się
+komunikatem — bez żądania do serwera, więc bez zużycia limitu.
+
+**297. Wygaśnięcie licznika pobiera stan od nowa.** Licznik dochodzący do zera bez odświeżenia
+zostawiłby na ekranie koszyk, którego serwer już nie ma. Wyjątek: gdy serwer PRZYSYŁA zero,
+licznik nic nie zgłasza — wywołanie odświeżenia z `initState` wypadłoby w trakcie budowania
+drzewa widgetów.
+
+**298. Przycisku „dalej do płatności” w tym bloku nie ma.** Płatność to blok H razem z checkoutem
+i Stripe'em. Pusty pasek koszyka jest lepszy niż przycisk, który nic nie robi — w poprzednim
+bloku taki przycisk stał na ekranie seansu z napisem „wkrótce” i to był kompromis na jeden blok,
+nie wzór do powtarzania.
+
+### Pułapki
+
+**DC. `Color.withOpacity` jest przedawnione we Flutterze 3.47.** Przy `flutter analyze
+--fatal-infos` przedawnienie zatrzymuje blok, więc przezroczystość ustawiamy przez
+`withValues(alpha: …)`. Wyszło to przy pisaniu, nie na przebiegu.
+
+**DD. `firstOrNull` NIE jest w `dart:core`.** Sprawdzone w źródłach: `Iterable.firstOrNull` żyje
+w rozszerzeniu z `package:collection`. Dla jednej linijki (litera rzędu z pierwszego miejsca)
+nie dokładamy zależności — trzy linijki pomocnika są tańsze niż nowy wpis w `pubspec.lock`
+i nowa rzecz do tłumaczenia na rozmowie.
+
+**DE. Test z licznikiem nie wiesza `pumpAndSettle`.** Bałem się tego, bo timer cykliczny co
+sekundę wywołuje `setState`. Nie wiesza, bo MIĘDZY tyknięciami nie ma zaplanowanej klatki:
+`pumpAndSettle` dochodzi do stanu bez klatek i wychodzi. Czas w testach przesuwamy jawnie przez
+`pump(Duration(...))`, więc nic nie czeka na realny upływ sekundy.

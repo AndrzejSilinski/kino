@@ -84,12 +84,17 @@ class SeatSelectionState {
   int get remaining => maxSeats - cart.seatsCount;
 
   /// Czy kliknięcie w to miejsce ma teraz sens.
+  ///
+  /// Wolne miejsce BEZ CENY też jest klikalne, choć blokada się nie uda.
+  /// Powód jest z życia: fotel wygląda na wolny, więc klient w niego kliknie,
+  /// a ekran, który milczy, wygląda jak zepsuty. `toggle` odpowiada wtedy
+  /// komunikatem, nie żądaniem do serwera (decyzja 296).
   bool canTap(Seat seat) {
     if (isBusy(seat) || cart.pendingBooking != null) {
       return false;
     }
     final SeatStatus status = statusOf(seat);
-    return status.isMine || (status.isFree && seat.price != null);
+    return status.isMine || status.isFree;
   }
 
   SeatSelectionState copyWith({

@@ -1,12 +1,16 @@
-// Szczegóły seansu: film, sala, godziny i cennik. Wybór miejsc dochodzi
-// w bloku F — przycisk jest już na ekranie, ale nieaktywny.
+// Szczegóły seansu: film, sala, godziny i cennik, a z niego wejście na plan
+// sali. Przycisk jest nieaktywny dokładnie wtedy, gdy serwer mówi, że seansu
+// nie można kupić (`is_bookable`) — aplikacja nie liczy tego z godziny.
 
 import 'package:cinema/features/common/async_view.dart';
+import 'package:cinema/features/common/hex_color.dart';
 import 'package:cinema/features/common/poster.dart';
 import 'package:cinema/models/screening.dart';
+import 'package:cinema/router.dart';
+import 'package:cinema/state/catalog.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:cinema/state/catalog.dart';
+import 'package:go_router/go_router.dart';
 
 class ScreeningScreen extends ConsumerWidget {
   const ScreeningScreen({required this.id, super.key});
@@ -99,7 +103,10 @@ class _Details extends StatelessWidget {
             contentPadding: EdgeInsets.zero,
             leading: CircleAvatar(
               radius: 10,
-              backgroundColor: _color(entry.color, theme),
+              backgroundColor: colorFromHex(
+                entry.color,
+                theme.colorScheme.primary,
+              ),
             ),
             title: Text(entry.categoryName),
             trailing: Text(entry.price.formatted),
@@ -110,27 +117,14 @@ class _Details extends StatelessWidget {
         Text(detail.movie.description),
         const SizedBox(height: 24),
         FilledButton(
-          // Wybór miejsc dochodzi w bloku F; przycisk jest tu po to, żeby
-          // ekran był kompletny i żeby test pilnował jego stanu.
-          onPressed: null,
+          onPressed: detail.isBookable
+              ? () => context.go(Routes.seats(detail.id))
+              : null,
           child: Text(
-            detail.isBookable
-                ? 'Wybierz miejsca (wkrótce)'
-                : 'Sprzedaż zakończona',
+            detail.isBookable ? 'Wybierz miejsca' : 'Sprzedaż zakończona',
           ),
         ),
       ],
     );
-  }
-
-  /// Kolor kategorii przychodzi jako `#RRGGBB` z panelu. Zły format nie może
-  /// wywrócić ekranu — wtedy bierzemy kolor z motywu.
-  Color _color(String value, ThemeData theme) {
-    final RegExpMatch? match = RegExp(r'^#([0-9a-fA-F]{6})$')
-        .firstMatch(value.trim());
-    if (match == null) {
-      return theme.colorScheme.primary;
-    }
-    return Color(0xFF000000 | int.parse(match.group(1)!, radix: 16));
   }
 }

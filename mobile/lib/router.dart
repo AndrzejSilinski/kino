@@ -7,6 +7,7 @@ import 'package:cinema/features/auth/login_screen.dart';
 import 'package:cinema/features/auth/register_screen.dart';
 import 'package:cinema/features/catalog/cinema_list_screen.dart';
 import 'package:cinema/features/catalog/cinema_screen.dart';
+import 'package:cinema/features/booking/seat_map_screen.dart';
 import 'package:cinema/features/catalog/screening_screen.dart';
 import 'package:cinema/features/diagnostics/diagnostics_screen.dart';
 import 'package:cinema/features/home/home_screen.dart';
@@ -30,6 +31,9 @@ class Routes {
 
   /// `/screenings/338`
   static String screening(int id) => '/screenings/$id';
+
+  /// `/screenings/338/seats` — wybór miejsc na seansie.
+  static String seats(int id) => '${screening(id)}/seats';
 }
 
 final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
@@ -67,6 +71,13 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
         path: '/screenings/:id(\\d+)',
         builder: (BuildContext context, GoRouterState state) =>
             ScreeningScreen(id: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        // Podścieżka wyboru miejsc trzyma się tego samego wzorca co seans:
+        // identyfikator tylko z cyfr, więc adres z linku nie wpuści śmieci.
+        path: '/screenings/:id(\\d+)/seats',
+        builder: (BuildContext context, GoRouterState state) =>
+            SeatMapScreen(screeningId: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: Routes.diagnostics,
