@@ -12,12 +12,15 @@
 // 3. Wygaśnięcie blokady pobiera stan od nowa. Licznik dochodzący do zera bez
 //    odświeżenia zostawiłby na ekranie koszyk, którego serwer już nie ma.
 
+import 'package:cinema/core/realtime.dart';
 import 'package:cinema/features/booking/cart_bar.dart';
+import 'package:cinema/features/booking/realtime_badge.dart';
 import 'package:cinema/features/booking/seat_grid.dart';
 import 'package:cinema/features/booking/seat_legend.dart';
 import 'package:cinema/features/common/async_view.dart';
 import 'package:cinema/models/seat_map.dart';
 import 'package:cinema/state/booking.dart';
+import 'package:cinema/state/realtime.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -31,11 +34,16 @@ class SeatMapScreen extends ConsumerWidget {
     final AsyncValue<SeatSelectionState> value = ref.watch(
       seatSelectionProvider(screeningId),
     );
+    // Stan połączenia przed pobraniem klienta to „łączę”: dopóki `client-config`
+    // nie wróci, gniazda jeszcze nie ma, a nie jest to awaria.
+    final RealtimeStatus live =
+        ref.watch(realtimeStatusProvider).value ?? RealtimeStatus.connecting;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Wybór miejsc'),
         actions: <Widget>[
+          RealtimeBadge(status: live),
           IconButton(
             tooltip: 'Odśwież plan sali',
             icon: const Icon(Icons.refresh),
@@ -48,6 +56,7 @@ class SeatMapScreen extends ConsumerWidget {
         onRetry: () => ref.invalidate(seatSelectionProvider(screeningId)),
         builder: (SeatSelectionState state) => _Loaded(
           state: state,
+          live: live,
           controller: ref.read(seatSelectionProvider(screeningId).notifier),
           onReload: () => ref.invalidate(seatSelectionProvider(screeningId)),
         ),
@@ -59,11 +68,13 @@ class SeatMapScreen extends ConsumerWidget {
 class _Loaded extends StatelessWidget {
   const _Loaded({
     required this.state,
+    required this.live,
     required this.controller,
     required this.onReload,
   });
 
   final SeatSelectionState state;
+  final RealtimeStatus live;
   final SeatSelection controller;
   final VoidCallback onReload;
 
@@ -74,6 +85,7 @@ class _Loaded extends StatelessWidget {
     return Column(
       children: <Widget>[
         _Header(state: state),
+        RealtimeWarning(status: live, onRefresh: onReload),
         if (state.cart.pendingBooking != null) const _PendingPayment(),
         if (state.notice case final SelectionNotice notice)
           _Notice(notice: notice, onClose: controller.dismissNotice),

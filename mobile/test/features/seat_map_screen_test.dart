@@ -2,11 +2,15 @@
 // tylko „czy się rysuje”, ale też czy nie da się kliknąć w cudze miejsce
 // i czy konflikt 409 widać na foteli, a nie tylko w komunikacie.
 
+import 'dart:async';
+
+import 'package:cinema/core/realtime.dart';
 import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/features/booking/seat_map_screen.dart';
 import 'package:cinema/features/booking/seat_tile.dart';
 import 'package:cinema/models/seat_map.dart';
 import 'package:cinema/state/providers.dart';
+import 'package:cinema/state/realtime.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -14,17 +18,26 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../fixtures/booking_api.dart';
+import '../fixtures/fake_socket.dart';
 
-Widget screenWith(FakeBookingApi api) => ProviderScope(
-  retry: noRetry,
-  overrides: [
-    httpClientProvider.overrideWithValue(
-      MockClient((http.Request request) async => api.handle(request)),
-    ),
-    secureStoreProvider.overrideWithValue(InMemorySecureStore()),
-  ],
-  child: const MaterialApp(home: SeatMapScreen(screeningId: testScreeningId)),
-);
+Widget screenWith(FakeBookingApi api, {RealtimeClient? realtime}) =>
+    ProviderScope(
+      retry: noRetry,
+      overrides: [
+        httpClientProvider.overrideWithValue(
+          MockClient((http.Request request) async => api.handle(request)),
+        ),
+        secureStoreProvider.overrideWithValue(InMemorySecureStore()),
+        // Ekran pokazuje stan połączenia i subskrybuje kanał seansu, więc bez
+        // atrapy gniazda test otwierałby prawdziwy WebSocket (pułapka DM).
+        realtimeClientProvider.overrideWithValue(
+          AsyncData<RealtimeClient>(realtime ?? clientFor(SocketLog())),
+        ),
+      ],
+      child: const MaterialApp(
+        home: SeatMapScreen(screeningId: testScreeningId),
+      ),
+    );
 
 Finder seatFinder(int id) => find.byKey(ValueKey<String>('seat-$id'));
 
@@ -198,6 +211,45 @@ void main() {
     expect(tileOf(tester, 102).onTap, isNull);
     expect(tileOf(tester, 103).onTap, isNull);
   });
+
+  testWidgets(
+    'ekran pokazuje stan podglądu na żywo i ostrzega przed nim',
+    timeout: const Timeout(Duration(seconds: 30)),
+    (WidgetTester tester) async {
+      // Dopóki gniazdo nie dostanie handshake'u, klient jest w stanie „łączę” —
+      // i to właśnie ten stan ekran ma pokazać. Trzy stany wskaźnika sprawdza
+      // osobno realtime_badge_test; tutaj chodzi o SPIĘCIE ekranu ze stanem.
+      final SocketLog sockets = SocketLog();
+      final RealtimeClient realtime = clientFor(sockets);
+
+      await tester.pumpWidget(screenWith(FakeBookingApi(), realtime: realtime));
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Łączę z podglądem na żywo'), findsOneWidget);
+      expect(find.textContaining('Łączę z podglądem na żywo'), findsOneWidget);
+      // Plan sali działa niezależnie od podglądu na żywo.
+      expect(find.byType(SeatTile), findsNWidgets(8));
+
+      sockets.last.server(
+        'pusher:connection_established',
+        data: <String, Object?>{'socket_id': '1.2'},
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byTooltip('Plan sali na żywo'), findsOneWidget);
+      expect(find.textContaining('Łączę'), findsNothing);
+
+      // Klienta zamykamy W CIELE testu, nie w `addTearDown` (pułapka DP): po
+      // handshake'u chodzi timer ciszy, a test widgetów sprawdza brak zaległych
+      // timerów ZANIM wykonają się sprzątania testu.
+      //
+      // I BEZ `await` (pułapka DQ): `dispose` anuluje timery synchronicznie, więc
+      // to wystarczy, żeby sprawdzenie przeszło — ale czekanie na zamknięcie
+      // strumienia gniazda w strefie testów widgetów nie wraca i test wisi do
+      // limitu czasu. W zwykłym `test()` to samo `await` działa bez zarzutu.
+      unawaited(realtime.dispose());
+    },
+  );
 
   testWidgets('błąd pobierania planu daje przycisk ponowienia', (
     WidgetTester tester,

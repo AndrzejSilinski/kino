@@ -576,3 +576,80 @@ ręcznie.
 uruchamia teraz `timeout 900 … flutter test --machine` i zapisuje w raporcie, gdy limit zadziałał.
 900 s to około dziesięciokrotność zdrowego przebiegu, więc poprawny zestaw nigdy tego nie dotknie,
 a zapętlony test kosztuje kwadrans, nie pół dnia.
+
+## Blok G2 — plan sali na żywo
+
+### Decyzje
+
+**305. Zdarzenia ze strumienia parsujemy TOLERANCYJNIE, odwrotnie niż odpowiedzi REST.**
+Model REST-owy przy niezgodnym kształcie rzuca `INVALID_RESPONSE`, bo odpowiedź jest reakcją na
+pytanie użytkownika i lepiej pokazać błąd niż zgadywać. Zdarzenie przychodzi samo — gdyby jedna
+niezrozumiała ramka wywracała ekran wyboru miejsc, klient straciłby koszyk z powodu, na który nie
+ma wpływu. Dlatego `SeatsEvent.tryParse` zwraca `null` i zdarzenie jest pomijane, a stan i tak
+dociągnie pełne pobranie po REST. Test pilnuje, że ramka bez `version` nie zmienia stanu w błąd.
+
+**306. JEDNO gniazdo na aplikację, kanały per ekran.** Protokół Pushera multipleksuje kanały na
+jednym połączeniu, więc osobne gniazdo na każdy ekran to bez potrzeby kolejny handshake, kolejny
+ping i kolejne wznawianie po wyjściu z tunelu. Kanał dochodzi i odchodzi razem z ekranem
+(`subscribe` / `unsubscribe` w `onDispose` providera), połączenie zostaje. Adres gniazda składamy
+z dwóch źródeł: host, port i schemat z parametru buildu, ścieżkę i klucz publiczny
+z `client-config` — klucza nie ma w aplikacji, tak samo jak w SPA.
+
+**307. Cudzą zmianę nakładamy na plan, a nie pobieramy planu od nowa.** Przy premierze zdarzeń
+jest dużo; pobieranie całej sali po każdym cudzym kliknięciu to setki żądań i migający ekran.
+`seats.changed` niesie stan absolutny wymienionych miejsc i dokładnie to nakładamy (kod z bloku F1,
+przetestowany wcześniej niż wpięty). Pełne pobranie zostaje dla dwóch sytuacji: `seats.resync`
+od serwera i powrót zerwanego łącza.
+
+**308. Klient MUSI widzieć, kiedy plan sali może być nieaktualny.** Bez tego wybiera miejsca
+z obrazka, który zamarzł pięć minut temu w windzie, a odmowę dostaje dopiero przy kliknięciu — i
+wygląda to jak błąd aplikacji, nie jak utrata łącza. Znaczek w pasku tytułu mówi o stanie
+połączenia, a pasek nad planem pojawia się tylko wtedy, gdy połączenia nie ma, i od razu daje
+przycisk odświeżenia. Oba widgety dostają status PARAMETREM, więc testują się bez gniazda.
+
+### Pułapki
+
+**DM. Test, który nie podstawi klienta czasu rzeczywistego, otworzy PRAWDZIWE gniazdo.** Odkąd
+ekran wyboru miejsc subskrybuje kanał seansu, każdy test tego ekranu i tego stanu buduje
+`realtimeClientProvider` — a ten w wersji produkcyjnej woła `WebSocketChannel.connect`. Test
+poszedłby do sieci, w CI wisiałby na timeoucie, a lokalnie zachowywał się różnie w zależności od
+tego, czy stoi Reverb. Dlatego oba istniejące pliki testów dostały w tym bloku
+`realtimeClientProvider.overrideWithValue(AsyncData(atrapa))`. Sprawdzone w źródle Riverpoda 3.4.3:
+`overrideWithValue` na `FutureProvider` przyjmuje `AsyncValue<T>`, więc atrapa wchodzi gotowa,
+bez uruchamiania ciała providera.
+
+**DO. Test, który tylko `read`uje providera, NIE odtwarza sytuacji z ekranu.** Pięć testów stanu
+kończyło się limitem czasu, a jeden pokazywał wersję planu sprzed zdarzenia — wyglądało to na
+przebudowę notifiera albo na zawieszenie w kliencie WebSocketa. Obie hipotezy okazały się
+nietrafione; rozstrzygnął dopiero przebieg diagnostyczny, który wypisywał KAŻDE przejście stanu.
+Po dołożeniu `container.listen(...)` te same testy zaczęły przechodzić, a wypisane przejścia
+pokazały przebieg dokładnie taki, jakiego oczekiwałem: `ładowanie → dane v=7 → dane v=9`, przy
+JEDNYM pobraniu planu. Czyli logika była poprawna od początku, a fałszywy był test: ekran
+`watch`uje stan wyboru miejsc, więc jest jego obserwatorem, a mój test tylko go czytał.
+Zdarzenia przekazywane przez `ref.listen` ze środka notifiera potrzebują obserwatora.
+Wniosek na stałe: test stanu ekranowego ZAWSZE zakłada obserwatora — i przy okazji zapisuje
+przejścia, bo to one dowodzą, że zdarzenie nałożyło się na plan, zamiast wywołać pobranie
+całej sali od nowa. Sprawdziłem też w źródle 3.4.3, że to nie jest automatyczne zwalnianie
+providera: `AsyncNotifierProvider` ma `isAutoDispose = false` domyślnie.
+
+**DP. W teście widgetów klienta z timerem trzeba zamknąć W CIELE testu, nie w `addTearDown`.**
+Test widgetów sprawdza „brak zaległych timerów” zaraz po ciele testu, ZANIM wykonają się
+sprzątania zarejestrowane przez `addTearDown`. Klient czasu rzeczywistego po handshake'u ma
+uruchomiony timer ciszy, więc test kończył się asercją `A Timer is still pending even after the
+widget tree was disposed` — mimo że sprzątanie było napisane poprawnie, tylko za późno.
+
+**DQ. W strefie testów widgetów nie wolno CZEKAĆ na zamknięcie strumienia.** Poprawka z pułapki DP
+(zamknięcie klienta w ciele testu zamiast w `addTearDown`) zamieniła jeden padający test w test
+wiszący dziesięć minut: `await dispose()` czeka na zamknięcie strumienia gniazda, a to w strefie
+testów widgetów nie wraca bez pompowania klatek. W zwykłym `test()` dokładnie ten sam `await`
+działa bez zarzutu — i działa w testach stanu, gdzie stoi w `addTearDown`. Rozwiązanie wynika
+z kolejności w samym `dispose`: timery anulują się SYNCHRONICZNIE, na początku metody, więc
+wystarczy wywołać ją bez `await` (`unawaited`), żeby sprawdzenie „brak zaległych timerów”
+przeszło. Do tego każdy test widgetów, który dotyka klienta czasu rzeczywistego, dostaje własny
+limit 30 sekund — żeby następne takie potknięcie kosztowało pół minuty, nie dziesięć.
+
+Trzy pułapki z jednego testu (DP, DQ i wcześniejsza DL) mają wspólny mianownik i warto go
+zapamiętać: **strefa testów widgetów ma własny zegar i własną pętlę zdarzeń**. Wszystko, co
+czeka na czas albo na strumień, zachowuje się tam inaczej niż w zwykłym teście. Dlatego logikę
+czasu rzeczywistego testujemy w `test()`, a w `testWidgets` sprawdzamy wyłącznie to, co widać
+na ekranie.

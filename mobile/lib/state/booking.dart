@@ -11,12 +11,17 @@
 // Dzięki temu po udanej blokadzie nie musimy poprawiać planu sali „na piechotę”:
 // miejsce jest w koszyku, więc `statusOf` maluje je jako moje (decyzja 285).
 
+import 'dart:async';
+
 import 'package:cinema/core/api_error.dart';
+import 'package:cinema/core/realtime.dart';
 import 'package:cinema/data/booking_repository.dart';
 import 'package:cinema/models/cart.dart';
 import 'package:cinema/models/client_config.dart';
+import 'package:cinema/models/seat_event.dart';
 import 'package:cinema/models/seat_map.dart';
 import 'package:cinema/state/providers.dart';
+import 'package:cinema/state/realtime.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 final Provider<BookingRepository> bookingRepositoryProvider =
@@ -128,11 +133,76 @@ class SeatSelection extends AsyncNotifier<SeatSelectionState> {
     // wydanie sesji.
     final SeatMap map = await _repo.seatMap(screeningId);
     final Cart cart = await _repo.cart(screeningId);
+
+    // Zdarzenia z kanału seansu nakładamy na plan, zamiast pobierać go od nowa
+    // przy każdej cudzej zmianie (decyzja 307). Subskrypcja żyje tyle, ile ten
+    // provider, więc kanał odchodzi razem z ekranem.
+    ref.listen(screeningEventsProvider(screeningId), (
+      AsyncValue<RealtimeEvent>? previous,
+      AsyncValue<RealtimeEvent> next,
+    ) {
+      final RealtimeEvent? event = next.value;
+      if (event != null) {
+        _onRealtimeEvent(event);
+      }
+    });
+
+    // Po powrocie zerwanego łącza nie ma zaległych zdarzeń do nałożenia —
+    // pobieramy pełny stan (wymóg 1.3 zadania, decyzja 302).
+    ref.listen(realtimeResubscribedProvider, (
+      AsyncValue<void>? previous,
+      AsyncValue<void> next,
+    ) {
+      if (!next.isLoading && !next.hasError) {
+        unawaited(reload());
+      }
+    });
+
     return SeatSelectionState(
       map: map,
       cart: cart,
       maxSeats: config.booking.maxSeatsPerSession,
     );
+  }
+
+  /// Nałożenie zdarzenia z kanału seansu.
+  ///
+  /// `seats.changed` niesie stan absolutny wymienionych miejsc — nakładamy go
+  /// na plan, a identyfikatory z koszyka mają pierwszeństwo, bo broadcast opisuje
+  /// MOJE miejsca jako `held` (decyzja 285). `seats.resync` to prośba serwera
+  /// o pełne pobranie.
+  void _onRealtimeEvent(RealtimeEvent raw) {
+    final SeatSelectionState? current = state.value;
+    final SeatsEvent? event = SeatsEvent.tryParse(raw);
+    if (current == null || event == null || event.screeningId != screeningId) {
+      return;
+    }
+    if (event.isResync) {
+      unawaited(reload());
+      return;
+    }
+    state = AsyncData<SeatSelectionState>(
+      current.copyWith(
+        map: current.map.applyChange(
+          version: event.version,
+          changes: event.changes,
+          mine: current.cart.seatIds,
+        ),
+      ),
+    );
+  }
+
+  /// Pełne pobranie stanu: plan sali i koszyk. Po przerwie w łączu ani jedno,
+  /// ani drugie nie jest pewne — cudze blokady mogły wygasnąć, a moje zniknąć.
+  Future<void> reload() async {
+    final SeatSelectionState? current = state.value;
+    if (current == null) {
+      return;
+    }
+    final SeatMap map = await _repo.seatMap(screeningId);
+    final Cart cart = await _repo.cart(screeningId);
+    final SeatSelectionState base = state.value ?? current;
+    state = AsyncData<SeatSelectionState>(base.copyWith(map: map, cart: cart));
   }
 
   /// Kliknięcie w fotel: wolny blokujemy, swój zwalniamy.

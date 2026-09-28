@@ -8,18 +8,24 @@
 //   - limit miejsc i miejsce bez ceny zatrzymujemy u siebie, żeby nie zużywać
 //     limitu 30 żądań na minutę na pewne odmowy.
 
+import 'package:cinema/core/realtime.dart';
 import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/models/seat_map.dart';
 import 'package:cinema/state/booking.dart';
 import 'package:cinema/state/providers.dart';
+import 'package:cinema/state/realtime.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../fixtures/booking_api.dart';
+import '../fixtures/fake_socket.dart';
 
 ProviderContainer containerFor(FakeBookingApi api) {
+  final SocketLog sockets = SocketLog();
+  final RealtimeClient realtime = clientFor(sockets);
+  addTearDown(realtime.dispose);
   final ProviderContainer container = ProviderContainer(
     retry: noRetry,
     overrides: [
@@ -29,6 +35,12 @@ ProviderContainer containerFor(FakeBookingApi api) {
       // Bez tego sesja próbowałaby pisać do Keystore, którego w teście
       // jednostkowym nie ma.
       secureStoreProvider.overrideWithValue(InMemorySecureStore()),
+      // Ekran wyboru miejsc subskrybuje kanał seansu, więc KAŻDY test tego
+      // stanu musi dostać atrapę gniazda — inaczej poszedłby do sieci
+      // (pułapka DM). Zdarzeniami zajmuje się osobny plik seat_realtime_test.
+      realtimeClientProvider.overrideWithValue(
+        AsyncData<RealtimeClient>(realtime),
+      ),
     ],
   );
   addTearDown(container.dispose);
