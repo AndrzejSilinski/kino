@@ -712,3 +712,55 @@ jak odróżnić sekretu od jego atrapy. Dlatego wartości w fiksturze są celowo
 prawdziwych (`pk_test_fikstura`, `sekret-testowy-fikstura`), a testy sprawdzają tylko to, że pola
 są niepuste i że nie wyciekają w `toString()`. Zasada ogólna: fikstura ma mieć kształt prawdziwej
 odpowiedzi, a nie jej wygląd.
+
+## Blok H2 — arkusz płatności i kanał rezerwacji
+
+### Decyzje
+
+**315. Stripe siedzi za JEDNĄ ścianą i tylko za nią.** `flutter_stripe` importuje dokładnie jeden
+plik aplikacji: `core/payment_sheet.dart`. Powód jest praktyczny, nie estetyczny: `Stripe` to
+singleton z polami statycznymi i kanałami do kodu natywnego, więc w `flutter test` nie da się go
+wywołać — nie ma platformy. Gdyby stan płatności albo ekran wołały go wprost, ani jednego z nich
+nie dałoby się przetestować inaczej niż klikaniem na telefonie, a to jest ostatnie miejsce
+w projekcie, w którym chcę polegać na klikaniu. Za interfejsem `PaymentSheet` test podstawia
+atrapę i przechodzi całą ścieżkę zakupu, łącznie z odmową karty i rezygnacją, w milisekundach.
+Warunki natywne (`FlutterFragmentActivity`, motyw z `Theme.AppCompat`) są spełnione od bloku C.
+
+**316. `completed` z arkusza znaczy „arkusz się domknął”, a nie „zapłacono” — i nazwa w kodzie ma
+tego pilnować.** Dlatego wynik nazywa się `PaymentSheetResult.completed`, a nie `paid`: ktoś, kto
+będzie to czytał za rok, ma się potknąć o nazwę, zanim napisze `if (result.isPaid) pokażBilet()`.
+Po `completed` idziemy prosto do czekania na serwer (decyzja 313). Dwa pozostałe wyniki są
+rozdzielone świadomie: **rezygnacja NIE jest błędem** — klient sam zamknął arkusz, wie, że nie
+zapłacił, i nie dostaje żadnego komunikatu, a rezerwacja stoi dalej, więc może spróbować ponownie.
+Przy odmowie pokazujemy komunikat Stripe'a (`localizedMessage`), bo mówi o rzeczy, której my nie
+wiemy — na przykład że to bank odrzucił transakcję. Kod `FailureCode.Canceled` (jedno „l”)
+sprawdzony w źródle `stripe_platform_interface` 14, nie zgadnięty.
+
+**317. Zdarzenie z kanału rezerwacji to WYZWALACZ, nie dane.** To odwrotnie niż przy planie sali,
+gdzie `seats.changed` niesie stan absolutny miejsc i wolno go nałożyć bez pytania serwera
+(decyzja 307). Tutaj po otrzymaniu ramki pytamy REST o rezerwację. Powód: rezerwacja to ZAKUP,
+więc to, co widzi klient, ma pochodzić z jednego źródła — tego samego, które pokaże historię
+zakupów i bilet. Ramka mówi tylko „coś się zmieniło, spytaj”. Dzięki temu nie ma drugiej ścieżki
+budowania stanu zakupu, którą trzeba by testować osobno i która mogłaby się rozjechać z pierwszą.
+`occurred_at` z ramki świadomie pomijamy: kolejność rozstrzyga odpowiedź REST-a.
+
+**318. Odpytywanie zostaje drogą PEWNĄ, kanał jest tylko drogą szybką.** Kuszące było zastąpić
+odpytywanie kanałem — jedno żądanie mniej i natychmiastowa reakcja. Nie wolno, bo zdarzenie nie
+musi dojść: serwer wysyła je przez Reverba za bezpiecznikiem, który przy awarii po prostu nie
+wysyła (widać to w `RealtimeNotifier`: metoda zwraca `false` i nikt tego nie ponawia), a zaległych
+ramek nikt nie powtarza. Gdyby aplikacja opierała się tylko na kanale, awaria Reverba zamieniłaby
+udaną płatność w ekran „czekamy” bez końca. Dlatego pętla odpytywania działa jak wcześniej,
+a kanał robi jedną rzecz: odświeża rezerwację, na czym pętla kończy się w następnym obrocie, bez
+kolejnego pytania. Test mierzy to dosłownie — dwa żądania zamiast trzech.
+
+### Pułapki
+
+**DS. Kanału rezerwacji nie da się zasubskrybować przed odpowiedzią checkoutu — i serwer na to
+liczy.** Nazwa kanału to `private-bookings.{reference}`, a `reference` poznajemy dopiero
+z odpowiedzi checkoutu. To nie jest niedogodność do obejścia: serwer świadomie NIE wysyła na ten
+kanał zdarzenia o statusie `pending` (komentarz w `RealtimeNotifier` mówi wprost, że nikt nie może
+jeszcze słuchać, więc wysyłka byłaby pustym żądaniem HTTP). Wniosek dla aplikacji: subskrypcja
+powstaje po `start()`, a pierwsze zdarzenie, na jakie wolno liczyć, to już rozstrzygnięcie.
+Osobno warto pamiętać, że to kanał WŁAŚCICIELA: podpis idzie przez `ApiClient`, czyli z tokenem
+Sanctum, i `BookingPolicy::listen` odmówi każdemu innemu — więc kupujący bez konta nie zobaczy
+tu niczego, w przeciwieństwie do kanału planu sali.

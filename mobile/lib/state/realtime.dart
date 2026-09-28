@@ -65,6 +65,26 @@ final StreamProvider<void> realtimeResubscribedProvider = StreamProvider<void>((
   yield* client.resubscribed;
 });
 
+/// Zdarzenia jednej rezerwacji. Kanał prywatny WŁAŚCICIELA: `/broadcasting/auth`
+/// idzie przez `ApiClient`, więc token Sanctum jedzie razem z żądaniem, a serwer
+/// sprawdza `BookingPolicy::listen`. Kupujący bez konta nie dostanie tu podpisu
+/// — i słusznie, bo rezerwacja zawsze ma właściciela.
+///
+/// Subskrybujemy dopiero wtedy, gdy znamy `reference`: przed odpowiedzią
+/// checkoutu nie ma jak nazwać kanału. Serwer to zakłada i zdarzenia o statusie
+/// `pending` wysyła wyłącznie na feed sprzedaży, a nie na kanał rezerwacji
+/// (sprawdzone w `RealtimeNotifier`).
+final bookingEventsProvider = StreamProvider.family<RealtimeEvent, String>((
+  Ref ref,
+  String reference,
+) async* {
+  final RealtimeClient client = await ref.watch(realtimeClientProvider.future);
+  final String channel = 'private-bookings.$reference';
+  ref.onDispose(() => client.unsubscribe(channel));
+  await client.subscribe(channel);
+  yield* client.events.where((RealtimeEvent event) => event.channel == channel);
+});
+
 /// Zdarzenia planu sali jednego seansu. Subskrypcja żyje tyle, ile provider,
 /// więc kanał odchodzi razem z ekranem.
 final screeningEventsProvider = StreamProvider.family<RealtimeEvent, int>((
