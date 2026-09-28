@@ -34,38 +34,68 @@ class ApiClient {
   /// Źródło tokenu i sesji zakupowej. Null w testach, które ich nie dotyczą.
   final ApiSession? session;
 
-  /// GET zwracający zawartość koperty `data` jako mapę.
+  /// GET, którego `data` jest OBIEKTEM (np. `/client-config`, `/auth/me`).
   Future<Map<String, Object?>> getJson(
     String path, {
     Map<String, String>? query,
     Map<String, String>? headers,
-  }) => _json('GET', path, query: query, headers: headers);
+  }) async => jsonChild(
+    await getEnvelope(path, query: query, headers: headers),
+    'data',
+    path,
+  );
+
+  /// GET, którego `data` jest TABLICĄ (listy katalogu). Osobna metoda, bo
+  /// koperta listy ma inny kształt niż koperta obiektu i mieszanie ich
+  /// kończyłoby się błędem INVALID_RESPONSE dopiero w czasie działania.
+  Future<List<Object?>> getList(
+    String path, {
+    Map<String, String>? query,
+    Map<String, String>? headers,
+  }) async => jsonList(
+    (await getEnvelope(path, query: query, headers: headers))['data'],
+    path,
+  );
+
+  /// CAŁA koperta: `data` plus `links` i `meta` przy listach paginowanych.
+  Future<Map<String, Object?>> getEnvelope(
+    String path, {
+    Map<String, String>? query,
+    Map<String, String>? headers,
+  }) => _envelope('GET', path, query: query, headers: headers);
 
   Future<Map<String, Object?>> postJson(
     String path, {
     Map<String, Object?>? body,
     Map<String, String>? headers,
-  }) => _json('POST', path, body: body, headers: headers);
+  }) async =>
+      _data(await _envelope('POST', path, body: body, headers: headers), path);
 
   Future<Map<String, Object?>> putJson(
     String path, {
     Map<String, Object?>? body,
     Map<String, String>? headers,
-  }) => _json('PUT', path, body: body, headers: headers);
+  }) async =>
+      _data(await _envelope('PUT', path, body: body, headers: headers), path);
 
   Future<Map<String, Object?>> patchJson(
     String path, {
     Map<String, Object?>? body,
     Map<String, String>? headers,
-  }) => _json('PATCH', path, body: body, headers: headers);
+  }) async =>
+      _data(await _envelope('PATCH', path, body: body, headers: headers), path);
 
   Future<Map<String, Object?>> deleteJson(
     String path, {
     Map<String, String>? headers,
-  }) => _json('DELETE', path, headers: headers);
+  }) async => _data(await _envelope('DELETE', path, headers: headers), path);
+
+  /// `data` z koperty albo pusta mapa, gdy odpowiedź nie miała ciała (204).
+  Map<String, Object?> _data(Map<String, Object?> envelope, String path) =>
+      envelope.isEmpty ? envelope : jsonChild(envelope, 'data', path);
 
   /// Wspólna droga wszystkich metod: nagłówki, wysyłka, koperta, błędy.
-  Future<Map<String, Object?>> _json(
+  Future<Map<String, Object?>> _envelope(
     String method,
     String path, {
     Map<String, Object?>? body,
@@ -87,7 +117,7 @@ class ApiClient {
       if (decoded == null) {
         return const <String, Object?>{};
       }
-      return jsonChild(jsonMap(decoded, path), 'data', path);
+      return jsonMap(decoded, path);
     }
     final ApiError error = ApiError.fromBody(
       response.statusCode,

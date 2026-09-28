@@ -284,3 +284,71 @@ oraz „String? nie pasuje do String”.
 budowie kontrolera i kończy się po kilkudziesięciu milisekundach — jeśli w tym czasie
 użytkownik zdążył się zalogować, ustawiał stan „niezalogowany” na świeżym stanie. Stąd
 strażnik: `restore()` nie nadpisuje stanu, gdy ktoś jest już zalogowany.
+
+---
+
+## Blok E — katalog: kina, dni, repertuar, seans
+
+### Decyzje
+
+**278. Klient API ma osobne metody dla koperty obiektu i koperty listy**
+(`getJson`, `getList`, `getEnvelope`). Listy katalogu zwracają `data` jako tablicę, a odczyty
+obiektów jako mapę. Jedna metoda „uniwersalna” oznaczałaby rzutowanie w każdym repozytorium
+i błąd `INVALID_RESPONSE` dopiero w czasie działania. `getEnvelope` oddaje też `links` i `meta`,
+bez czego nie da się obsłużyć paginacji.
+
+**279. Wybór kina zapamiętany w tym samym magazynie co token.** To nie jest sekret, ale
+dokładanie `shared_preferences` tylko dla jednego sluga oznaczałoby kolejną wtyczkę natywną
+i drugie miejsce, w którym dane zostają po wylogowaniu. Ekran główny prowadzi wprost do
+repertuaru zapamiętanego kina, a listę miast pokazuje tylko przy pierwszym uruchomieniu.
+
+**280. O tym, czy seans można kupić, decyduje wyłącznie serwer** (`is_bookable`, `is_sold_out`,
+`has_started`). Aplikacja nie liczy tego z godziny ani z liczby wolnych miejsc — inaczej przy
+zmianie reguł (bufor przed seansem, seans odwołany, sprzedaż wstrzymana) telefon pokazywałby
+co innego niż web. Powód niedostępności zamieniamy na krótki napis na karcie i w `Semantics`.
+
+**281. Repertuar dnia dobiera kolejne strony.** Lista ma 50 pozycji na stronę; przy dużym kinie
+jeden dzień może się nie zmieścić. Pętla po stronach ma bezpiecznik (5 stron), żeby błąd
+serwera w `meta.last_page` nie zapętlił aplikacji.
+
+**282. Wspólny `AsyncView` dla ładowania i błędu.** Odkąd automatyczne ponawianie jest wyłączone
+(decyzja 270), KAŻDY ekran z danymi z sieci musi mieć komunikat i przycisk „Spróbuj ponownie”.
+Jeden widget zamiast powtarzania tego na każdym ekranie.
+
+**283. Plakat zawsze ma zastępnik, a zastępnikiem jest ikona.** W danych deweloperskich
+`poster_url` bywa `null`, a na telefonie obraz może się nie pobrać (brak sieci, zerwany tunel
+`adb`). Widget `Poster` pokazuje wtedy ikonę filmu na tle — lista nigdy się nie wywraca i nie
+zostawia pustej dziury. Pierwsza wersja wypisywała w ramce tytuł; zrezygnowaliśmy z tego, bo
+tytuł stoi zawsze bezpośrednio obok plakatu (karta seansu, nagłówek szczegółów), więc napis
+w środku ramki dublował go na ekranie, w czytniku ekranu i w wyszukiwaniu widgetów w testach
+(pułapka CW). Plakat jest dekoracją: nie wnosi własnej semantyki, bo cały opis pozycji składa
+`Semantics` karty.
+
+### Pułapki
+
+**CU. Rodzina providerów Riverpoda porównuje klucze przez `==`.** Klucz złożony (kino + dzień)
+musi mieć równość po wartości i `hashCode`, inaczej każde wejście na ekran tworzy nowy provider
+i nowe żądanie do API. Stąd klasa `DaySchedule` z ręcznie napisanym `==`.
+
+**CV. Nazwy klas rodzin providerów różnią się między wersjami Riverpoda.** Adnotacja typu
+(`FutureProviderFamily<…>`) potrafi się nie skompilować po aktualizacji, choć `FutureProvider.family`
+działa dalej. Rodziny zostawiamy bez jawnego argumentu typu — wnioskowanie jest odporne.
+
+**CW. `find.text('tytuł')` trafia w każdy napis, także w ten w zastępniku plakatu.** Dwa testy
+repertuaru padły (`Found 2 widgets with text "Oppenheimer"` i `Bad state: Too many elements`),
+bo zastępnik plakatu wypisywał tytuł filmu, a w teście widgetów `Image.network` nigdy nie
+pobiera obrazu — zastępnik pokazuje się więc w KAŻDEJ pozycji listy, nie tylko tam, gdzie
+`poster_url` jest `null`. Dwie nauki: (1) w teście widgetów obrazy z sieci nigdy się nie
+wczytują, więc zawsze widać gałąź zastępnika, (2) test, któremu chodzi o pozycję listy, ma jej
+szukać po strukturze — `find.widgetWithText(ListTile, 'tytuł')` zamiast `find.text('tytuł')`
+albo `find.ancestor(…)` — bo wtedy nie rozsypie się od dodania gdziekolwiek drugiego napisu
+z tym samym tekstem. Sam napis w zastępniku i tak usunęliśmy (decyzja 283), bo dublował tytuł
+stojący obok.
+
+**CX. Wzorzec testu dymnego widzi PLIK, nie zachowanie programu.** Sprawdzenie „trasa kina ze
+slugiem" szukało napisu `cinemas/:slug`, a w kodzie ścieżka składa się z interpolacji
+(`'${Routes.cinemas}/:slug([a-z0-9-]+)'`) — w pliku takiego ciągu po prostu nie ma, więc test
+dymny wywalił blok, mimo że trasa działa i przechodzą ją testy widgetów. Wniosek: wzorzec pisze
+się po zajrzeniu do gotowego pliku, a nie z pamięci o tym, jak ścieżka wygląda po złożeniu.
+Przy okazji sprawdzamy też ograniczenia parametrów (`[a-z0-9-]+`, `\d+`) — to one pilnują, żeby
+adres z powiadomienia albo z linku nie wpuścił do aplikacji śmieci.

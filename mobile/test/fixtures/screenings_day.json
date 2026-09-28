@@ -1,0 +1,60 @@
+{
+  "data": [
+    {
+      "id": 338,
+      "starts_at": "2026-09-18T11:00:00+02:00",
+      "ends_at": "2026-09-18T14:15:00+02:00",
+      "projection_type": "2d",
+      "projection_type_label": "2D",
+      "language_version": "subtitles",
+      "language_version_label": "Napisy polskie",
+      "hall": { "id": 6, "name": "Sala A" },
+      "movie": {
+        "id": 2,
+        "slug": "oppenheimer",
+        "title": "Oppenheimer",
+        "duration_minutes": 180,
+        "age_rating": "15",
+        "poster_url": null
+      },
+      "seats": { "total": 90, "taken": 1, "available": 89 },
+      "is_sold_out": false,
+      "has_started": false,
+      "is_bookable": true
+    },
+    {
+      "id": 402,
+      "starts_at": "2026-09-18T20:30:00+02:00",
+      "ends_at": "2026-09-18T22:15:00+02:00",
+      "projection_type": "3d",
+      "projection_type_label": "3D",
+      "language_version": "dubbing",
+      "language_version_label": "Dubbing",
+      "hall": { "id": 7, "name": "Sala B" },
+      "movie": {
+        "id": 5,
+        "slug": "diuna-czesc-druga",
+        "title": "Diuna: Część druga",
+        "duration_minutes": 105,
+        "age_rating": "12",
+        "poster_url": "http://localhost:8080/storage/posters/diuna.jpg"
+      },
+      "seats": { "total": 184, "taken": 184, "available": 0 },
+      "is_sold_out": true,
+      "has_started": false,
+      "is_bookable": false
+    }
+  ],
+  "links": { "first": "?page=1", "last": "?page=1", "prev": null, "next": null },
+  "meta": {
+    "current_page": 1,
+    "from": 1,
+    "last_page": 1,
+    "path": "http://localhost:8080/api/v1/cinemas/gdansk-kino-baltyk/screenings",
+    "per_page": 50,
+    "to": 2,
+    "total": 2,
+    "date": "2026-09-18",
+    "timezone": "Europe/Warsaw"
+  }
+}

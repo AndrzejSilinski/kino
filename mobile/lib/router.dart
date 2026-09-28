@@ -5,6 +5,9 @@
 
 import 'package:cinema/features/auth/login_screen.dart';
 import 'package:cinema/features/auth/register_screen.dart';
+import 'package:cinema/features/catalog/cinema_list_screen.dart';
+import 'package:cinema/features/catalog/cinema_screen.dart';
+import 'package:cinema/features/catalog/screening_screen.dart';
 import 'package:cinema/features/diagnostics/diagnostics_screen.dart';
 import 'package:cinema/features/home/home_screen.dart';
 import 'package:flutter/material.dart';
@@ -19,7 +22,14 @@ class Routes {
   static const String home = '/';
   static const String login = '/login';
   static const String register = '/register';
+  static const String cinemas = '/cinemas';
   static const String diagnostics = '/diagnostics';
+
+  /// `/cinemas/gdansk-kino-baltyk` — ta sama postać co w SPA.
+  static String cinema(String slug) => '$cinemas/$slug';
+
+  /// `/screenings/338`
+  static String screening(int id) => '/screenings/$id';
 }
 
 final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
@@ -40,6 +50,23 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
         path: Routes.register,
         builder: (BuildContext context, GoRouterState state) =>
             const RegisterScreen(),
+      ),
+      GoRoute(
+        path: Routes.cinemas,
+        builder: (BuildContext context, GoRouterState state) =>
+            const CinemaListScreen(),
+      ),
+      GoRoute(
+        // Parametr sluga ograniczony wzorcem — adres z powiadomienia albo
+        // z linku nie wpuści do aplikacji czegoś, co nie jest slugiem.
+        path: '${Routes.cinemas}/:slug([a-z0-9-]+)',
+        builder: (BuildContext context, GoRouterState state) =>
+            CinemaScreen(slug: state.pathParameters['slug']!),
+      ),
+      GoRoute(
+        path: '/screenings/:id(\\d+)',
+        builder: (BuildContext context, GoRouterState state) =>
+            ScreeningScreen(id: int.parse(state.pathParameters['id']!)),
       ),
       GoRoute(
         path: Routes.diagnostics,

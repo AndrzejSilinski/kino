@@ -4,6 +4,7 @@
 import 'package:cinema/models/user.dart';
 import 'package:cinema/router.dart';
 import 'package:cinema/state/auth.dart';
+import 'package:cinema/state/catalog.dart';
 import 'package:cinema/state/providers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +16,12 @@ class HomeScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final AuthState auth = ref.watch(authProvider);
+    // Zapamiętane kino prowadzi wprost do repertuaru; bez niego zaczynamy
+    // od listy miast (decyzja 279).
+    final String? cinema = ref.watch(selectedCinemaProvider);
+    final String catalogPath = cinema == null
+        ? Routes.cinemas
+        : Routes.cinema(cinema);
 
     return Scaffold(
       appBar: AppBar(
@@ -29,17 +36,27 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16),
-        child: switch (auth.status) {
-          AuthStatus.unknown => const Center(
-            child: CircularProgressIndicator(),
-          ),
-          AuthStatus.anonymous => _Anonymous(busy: auth.busy),
-          AuthStatus.authenticated => _Authenticated(
-            user: auth.user,
-            busy: auth.busy,
-            onLogout: () => ref.read(authProvider.notifier).logout(),
-          ),
-        },
+        child: Column(
+          children: <Widget>[
+            Expanded(
+              child: switch (auth.status) {
+                AuthStatus.unknown => const Center(
+                  child: CircularProgressIndicator(),
+                ),
+                AuthStatus.anonymous => _Anonymous(busy: auth.busy),
+                AuthStatus.authenticated => _Authenticated(
+                  user: auth.user,
+                  busy: auth.busy,
+                  onLogout: () => ref.read(authProvider.notifier).logout(),
+                ),
+              },
+            ),
+            FilledButton.tonal(
+              onPressed: () => context.go(catalogPath),
+              child: const Text('Repertuar i bilety'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -117,11 +134,6 @@ class _Authenticated extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ],
-        const SizedBox(height: 24),
-        const Text(
-          'Wybór kina i repertuar pojawią się w kolejnym kroku.',
-          textAlign: TextAlign.center,
-        ),
         const SizedBox(height: 24),
         OutlinedButton(
           onPressed: busy ? null : onLogout,

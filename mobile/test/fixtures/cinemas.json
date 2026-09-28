@@ -1,0 +1,38 @@
+{
+  "data": [
+    {
+      "city": "Gdańsk",
+      "cinemas": [
+        {
+          "id": 3,
+          "slug": "gdansk-kino-baltyk",
+          "name": "Kino Bałtyk",
+          "city": "Gdańsk",
+          "address": "al. Grunwaldzka 82",
+          "timezone": "Europe/Warsaw"
+        }
+      ]
+    },
+    {
+      "city": "Warszawa",
+      "cinemas": [
+        {
+          "id": 1,
+          "slug": "warszawa-kino-atlantyk",
+          "name": "Kino Atlantyk",
+          "city": "Warszawa",
+          "address": "ul. Złota 44",
+          "timezone": "Europe/Warsaw"
+        },
+        {
+          "id": 4,
+          "slug": "warszawa-kino-syrena",
+          "name": "Kino Syrena",
+          "city": "Warszawa",
+          "address": "ul. Marszałkowska 1",
+          "timezone": "Europe/Warsaw"
+        }
+      ]
+    }
+  ]
+}
