@@ -5,7 +5,11 @@
 
 import 'package:cinema/core/api_client.dart';
 import 'package:cinema/core/app_config.dart';
+import 'package:cinema/core/secure_store.dart';
+import 'package:cinema/core/session.dart';
+import 'package:cinema/data/auth_repository.dart';
 import 'package:cinema/models/client_config.dart';
+import 'package:cinema/state/auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
@@ -37,12 +41,35 @@ final Provider<http.Client> httpClientProvider = Provider<http.Client>((
   return client;
 });
 
+/// Magazyn na token i sesję zakupową. W testach podmieniany na wersję
+/// w pamięci, żeby nie wołać wtyczki natywnej.
+final Provider<SecureStore> secureStoreProvider = Provider<SecureStore>(
+  (Ref ref) => const KeystoreSecureStore(),
+);
+
+/// Jedna sesja na cały czas życia aplikacji: token bearer i identyfikator
+/// sesji zakupowej (decyzja 267).
+final Provider<AppSession> sessionProvider = Provider<AppSession>(
+  (Ref ref) => AppSession(ref.watch(secureStoreProvider)),
+);
+
 final Provider<ApiClient> apiClientProvider = Provider<ApiClient>(
   (Ref ref) => ApiClient(
     config: ref.watch(appConfigProvider),
     httpClient: ref.watch(httpClientProvider),
+    session: ref.watch(sessionProvider),
   ),
 );
+
+final Provider<AuthRepository> authRepositoryProvider =
+    Provider<AuthRepository>(
+      (Ref ref) => AuthRepository(ref.watch(apiClientProvider)),
+    );
+
+/// Stan zalogowania. `ref.read(authProvider.notifier)` daje metody
+/// login/register/logout, a `ref.watch(authProvider)` sam stan.
+final NotifierProvider<AuthController, AuthState> authProvider =
+    NotifierProvider<AuthController, AuthState>(AuthController.new);
 
 /// Konfiguracja z serwera. `ref.invalidate(clientConfigProvider)` ponawia próbę.
 final FutureProvider<ClientConfig> clientConfigProvider =

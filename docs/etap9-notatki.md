@@ -221,3 +221,66 @@ strażniku. Katalog dopisany do `mobile/android/.gitignore`.
 **CK. Szablon Fluttera trzyma `gradlew`, `gradlew.bat` i `gradle-wrapper.jar` POZA gitem**
 (`mobile/android/.gitignore`) i odtwarza je przy buildzie. CI w Etapie 10 nie może więc
 wywołać `./gradlew` z repozytorium — musi iść przez `flutter build`.
+
+---
+
+## Blok D — rdzeń: konto, sesja, nawigacja, czas i pieniądze
+
+### Decyzje
+
+**272. Token bearer i sesja zakupowa wędrują przez jeden obiekt `ApiSession`.** Klient API nie
+zna magazynu ani logiki logowania: pyta sesję o token i identyfikator koszyka, a przy 401
+`UNAUTHENTICATED` woła `onTokenRejected()`. Dzięki temu wygasły token znika z telefonu przy
+pierwszym odrzuconym żądaniu, a nie dopiero przy następnym otwarciu ekranu konta. Kod klienta
+zostaje testowalny bez wtyczek natywnych — testy podstawiają atrapę sesji.
+
+**273. Ścieżki nawigacji identyczne jak w SPA** (`/`, `/login`, `/register`, plus `/diagnostics`
+tylko w aplikacji). Powiadomienie push niesie `data.url` w postaci `/bookings/{reference}` —
+te same ścieżki znaczy brak tłumaczenia adresów przy deep linkach w bloku M i jeden format
+w mailu, w SPA i w aplikacji.
+
+**274. Sesja zakupowa jest jedna na instalację i leży w Keystore obok tokenu.** W SPA jest jedna
+na kartę przeglądarki (użytkownik może mieć dwa koszyki), na telefonie taki przypadek nie
+istnieje. Stały identyfikator pozwala wrócić do porzuconego koszyka po zamknięciu aplikacji —
+blokady miejsc należą do sesji, nie do konta, więc wylogowanie ich nie kasuje.
+
+**275. Wylogowanie jest lokalne nawet bez sieci.** Najpierw próbujemy `POST /auth/logout`
+(kasuje token tego urządzenia i przez kaskadę jego urządzenie push), ale błąd nie zatrzymuje
+czyszczenia magazynu. Token na serwerze wygaśnie sam po 30 dniach. Ograniczenie opisujemy
+w README.
+
+**276. Reguły hasła pilnuje serwer.** Formularz sprawdza tylko rzeczy oczywiste (pola niepuste,
+hasła zgodne), a komunikaty `errors` z 422 pokazujemy przy polach. Dwa zestawy reguł
+rozjechałyby się przy pierwszej zmianie polityki haseł w backendzie.
+
+**277. `CinemaTime` zamiast `DateTime`.** Godziny seansów przychodzą w strefie kina; typ trzyma
+osobno czas ścienny (do wyświetlenia dosłownie) i przesunięcie strefy (do porównań przez
+`instant`). `Money` trzyma grosze i gotowy napis z serwera — aplikacja nigdy nie formatuje kwot
+sama.
+
+### Pułapki
+
+**CP. `DateTime.parse` gubi strefę kina.** `DateTime.parse('2026-09-18T19:30:00+02:00')` daje
+moment w UTC, a `toLocal()` przelicza go na strefę TELEFONU. Użytkownik w innej strefie
+zobaczyłby inną godzinę seansu niż ta na bilecie. Dlatego czas ścienny parsujemy sami
+i trzymamy w `DateTime.utc(...)` wyłącznie jako pojemnik na pola, bez przeliczeń.
+
+**CQ. Strażnik w teście dymnym trafił we własny komentarz.** Reguła „w `lib/` nie ma
+`DateTime.parse` ani `toLocal()`” wyłapała zdanie z `cinema_time.dart`, które tłumaczy,
+dlaczego ich nie używamy. Wzorce szukające zakazanych wywołań muszą pomijać linie
+komentarza — inaczej dokumentacja decyzji psuje kontrolę tej decyzji.
+
+**CS. `Override` z Riverpoda nie jest typem do wpisania w kodzie** (biblioteka go nie
+eksportuje), a `flutter analyze` mówi o tym dopiero przy `List<Override>`. Listę overrides
+zostawiamy bez jawnego argumentu typu — wnioskuje się z elementów. Ta sama pomyłka trafiła
+mnie w blokach C i D.
+
+**CT. W Darcie znacznik null-aware przy kluczu to co innego niż przy wartości.**
+`?klucz: wartość` pomija wpis, gdy null jest kluczem; przy nullowalnej wartości poprawne jest
+`klucz: ?wartość`. Pomyłka daje dwa komunikaty naraz: „operator ? niepotrzebny przy kluczu”
+oraz „String? nie pasuje do String”.
+
+**CR. Odczyt tokenu z Keystore wyścigał się z ręcznym logowaniem.** `restore()` startuje przy
+budowie kontrolera i kończy się po kilkudziesięciu milisekundach — jeśli w tym czasie
+użytkownik zdążył się zalogować, ustawiał stan „niezalogowany” na świeżym stanie. Stąd
+strażnik: `restore()` nie nadpisuje stanu, gdy ktoś jest już zalogowany.

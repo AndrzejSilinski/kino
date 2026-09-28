@@ -1,35 +1,36 @@
 // Test startu aplikacji: to, co uruchamia main(), musi dać się zbudować
-// w teście. Sam ekran diagnostyczny ma własne testy stanów
-// (test/features/diagnostics_screen_test.dart).
+// w teście i pokazać ekran główny. Ekran diagnostyczny i logowanie mają
+// własne testy.
+
+import 'dart:convert';
 
 import 'package:cinema/app.dart';
-import 'package:cinema/models/client_config.dart';
+import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/state/providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 
 void main() {
-  testWidgets('aplikacja startuje na ekranie diagnostycznym', (
+  testWidgets('aplikacja startuje na ekranie głównym dla gościa', (
     WidgetTester tester,
   ) async {
     await tester.pumpWidget(
       ProviderScope(
         retry: noRetry,
         overrides: [
-          clientConfigProvider.overrideWith(
-            (Ref ref) async => const ClientConfig(
-              apiVersion: 'v1',
-              realtime: RealtimeConfig(
-                broadcaster: 'reverb',
-                key: 'testowyKluczReverba',
-                path: '/app',
+          secureStoreProvider.overrideWithValue(InMemorySecureStore()),
+          httpClientProvider.overrideWithValue(
+            MockClient(
+              (http.Request request) async => http.Response(
+                jsonEncode(<String, Object?>{
+                  'message': 'Wymagane jest zalogowanie.',
+                  'code': 'UNAUTHENTICATED',
+                }),
+                401,
+                headers: <String, String>{'content-type': 'application/json'},
               ),
-              booking: BookingConfig(
-                seatLockTtl: Duration(minutes: 10),
-                maxSeatsPerSession: 10,
-                paymentWindow: Duration(minutes: 10),
-              ),
-              pushEnabled: true,
             ),
           ),
         ],
@@ -38,7 +39,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text('Kino — diagnostyka'), findsOneWidget);
-    expect(find.text('Połączenie z API działa'), findsOneWidget);
+    expect(find.text('Kino'), findsOneWidget);
+    expect(find.text('Zaloguj się'), findsWidgets);
   });
 }

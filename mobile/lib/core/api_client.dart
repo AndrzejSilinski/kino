@@ -1,14 +1,16 @@
 // Klient API — port `frontend/src/api/http.ts` z SPA (decyzja 196).
 //
-// Blok C obsługuje tylko GET bez uwierzytelnienia: tyle wystarczy na
-// `/client-config` i na ekran diagnostyczny. Token bearer, sesja zakupowa
-// (`X-Session-Id`), POST, PATCH i multipart dochodzą w bloku D.
-//
 // Reguły przeniesione ze SPA:
 //   - sukces zawsze w kopercie `data`; brak koperty to INVALID_RESPONSE,
 //   - błąd rozpoznajemy po `code` z ciała, nie po statusie,
 //   - brak sieci i timeout dają kod klienta NETWORK_ERROR,
-//   - 429 przenosi `Retry-After` do wyjątku.
+//   - 429 przenosi `Retry-After` do wyjątku,
+//   - token bearer dokładamy, gdy sesja go ma; 401 UNAUTHENTICATED oznacza,
+//     że serwer go odrzucił, więc czyścimy go u siebie (decyzja 272),
+//   - identyfikator sesji zakupowej wysyłamy i zapamiętujemy z KAŻDEJ
+//     odpowiedzi, bo to serwer go wydaje (decyzja 15).
+//
+// Multipart (avatar) dochodzi w bloku J.
 
 import 'dart:async';
 import 'dart:convert';
@@ -17,10 +19,11 @@ import 'dart:io';
 import 'package:cinema/core/api_error.dart';
 import 'package:cinema/core/app_config.dart';
 import 'package:cinema/core/json.dart';
+import 'package:cinema/core/session.dart';
 import 'package:http/http.dart' as http;
 
 class ApiClient {
-  ApiClient({required this.config, required this.httpClient});
+  ApiClient({required this.config, required this.httpClient, this.session});
 
   /// Tyle czeka telefon w kiepskiej sieci, zanim pokażemy NETWORK_ERROR.
   static const Duration timeout = Duration(seconds: 15);
@@ -28,32 +31,116 @@ class ApiClient {
   final AppConfig config;
   final http.Client httpClient;
 
+  /// Źródło tokenu i sesji zakupowej. Null w testach, które ich nie dotyczą.
+  final ApiSession? session;
+
   /// GET zwracający zawartość koperty `data` jako mapę.
   Future<Map<String, Object?>> getJson(
     String path, {
     Map<String, String>? query,
     Map<String, String>? headers,
+  }) => _json('GET', path, query: query, headers: headers);
+
+  Future<Map<String, Object?>> postJson(
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? headers,
+  }) => _json('POST', path, body: body, headers: headers);
+
+  Future<Map<String, Object?>> putJson(
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? headers,
+  }) => _json('PUT', path, body: body, headers: headers);
+
+  Future<Map<String, Object?>> patchJson(
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? headers,
+  }) => _json('PATCH', path, body: body, headers: headers);
+
+  Future<Map<String, Object?>> deleteJson(
+    String path, {
+    Map<String, String>? headers,
+  }) => _json('DELETE', path, headers: headers);
+
+  /// Wspólna droga wszystkich metod: nagłówki, wysyłka, koperta, błędy.
+  Future<Map<String, Object?>> _json(
+    String method,
+    String path, {
+    Map<String, Object?>? body,
+    Map<String, String>? query,
+    Map<String, String>? headers,
   }) async {
     final Uri uri = config.apiUri(path, query: query);
     final http.Response response = await _send(
-      () => httpClient.get(uri, headers: _headers(headers)),
+      () => _request(method, uri, body, headers),
       path,
     );
-    final Object? body = _decode(response, path);
-    if (response.statusCode >= 200 && response.statusCode < 300) {
-      return jsonChild(jsonMap(body, path), 'data', path);
+    final String? sessionId = response.headers[_sessionHeaderLower];
+    if (sessionId != null && sessionId.isNotEmpty) {
+      session?.rememberBookingSessionId(sessionId);
     }
-    throw ApiError.fromBody(
+    final Object? decoded = _decode(response, path);
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      // Odpowiedzi 204 (np. usunięcie urządzenia push) nie mają ciała.
+      if (decoded == null) {
+        return const <String, Object?>{};
+      }
+      return jsonChild(jsonMap(decoded, path), 'data', path);
+    }
+    final ApiError error = ApiError.fromBody(
       response.statusCode,
-      body,
+      decoded,
       retryAfter: parseRetryAfter(response.headers['retry-after']),
     );
+    if (error.code == ApiError.unauthenticated) {
+      session?.onTokenRejected();
+    }
+    throw error;
   }
 
-  Map<String, String> _headers(Map<String, String>? extra) => <String, String>{
-    'Accept': 'application/json',
-    ...?extra,
-  };
+  Future<http.Response> _request(
+    String method,
+    Uri uri,
+    Map<String, Object?>? body,
+    Map<String, String>? headers,
+  ) {
+    final Map<String, String> all = _headers(headers, withBody: body != null);
+    final String? encoded = body == null ? null : jsonEncode(body);
+    switch (method) {
+      case 'POST':
+        return httpClient.post(uri, headers: all, body: encoded);
+      case 'PUT':
+        return httpClient.put(uri, headers: all, body: encoded);
+      case 'PATCH':
+        return httpClient.patch(uri, headers: all, body: encoded);
+      case 'DELETE':
+        return httpClient.delete(uri, headers: all, body: encoded);
+      default:
+        return httpClient.get(uri, headers: all);
+    }
+  }
+
+  static const String sessionHeader = 'X-Session-Id';
+  static const String _sessionHeaderLower = 'x-session-id';
+
+  Map<String, String> _headers(
+    Map<String, String>? extra, {
+    bool withBody = false,
+  }) {
+    final String? token = session?.token;
+    final String? sessionId = session?.bookingSessionId;
+    return <String, String>{
+      'Accept': 'application/json',
+      if (withBody) 'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+      // Znacznik null-aware stoi przy WARTOŚCI (klucz jest stały): wpis znika,
+      // gdy serwer nie wydał jeszcze identyfikatora sesji zakupowej.
+      sessionHeader: ?sessionId,
+      ...?extra,
+    };
+  }
 
   /// Zamienia awarie transportu na jeden kod klienta (NETWORK_ERROR).
   Future<http.Response> _send(
