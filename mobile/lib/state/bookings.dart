@@ -1,6 +1,7 @@
 // Stan historii zakupów: lista z doczytywaniem i szczegóły jednej rezerwacji.
 
 import 'package:cinema/core/api_error.dart';
+import 'package:cinema/core/file_share.dart';
 import 'package:cinema/core/session.dart';
 import 'package:cinema/data/bookings_repository.dart';
 import 'package:cinema/models/booking.dart';
@@ -85,6 +86,51 @@ bookingHistoryProvider =
     AsyncNotifierProvider<BookingHistory, Paginated<Booking>>(
       BookingHistory.new,
     );
+
+/// Udostępnianie pliku przez system. Podmieniane w testach na atrapę, bo
+/// prawdziwe wymaga platformy natywnej (decyzja 327 — ta sama zasada co 315).
+final Provider<FileShare> fileShareProvider = Provider<FileShare>(
+  (Ref ref) => const SystemFileShare(),
+);
+
+/// Pobranie PDF-a z biletami i podanie go systemowi.
+///
+/// Stan to jedna flaga „trwa pobieranie”: PDF z rozpoznania waży 42 kB, więc
+/// w kiepskiej sieci trwa to chwilę, a podwójne stuknięcie zużyłoby dwa
+/// żądania z limitu 30 na minutę, wspólnego z obrazami kodów QR.
+class TicketsPdf extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  Future<ApiError?> share(String reference) async {
+    if (state) {
+      return null;
+    }
+    state = true;
+    try {
+      final List<int> bytes = await ref
+          .read(bookingsRepositoryProvider)
+          .ticketsPdf(reference);
+      await ref
+          .read(fileShareProvider)
+          .shareBytes(
+            // Ta sama nazwa, jaką podaje serwer w Content-Disposition — żeby plik
+            // zapisany z telefonu nazywał się tak samo jak pobrany z przeglądarki.
+            filename: 'bilety-$reference.pdf',
+            bytes: bytes,
+            mime: 'application/pdf',
+          );
+      return null;
+    } on ApiError catch (error) {
+      return error;
+    } finally {
+      state = false;
+    }
+  }
+}
+
+final NotifierProvider<TicketsPdf, bool> ticketsPdfProvider =
+    NotifierProvider<TicketsPdf, bool>(TicketsPdf.new);
 
 /// Szczegóły jednej rezerwacji. Rodzina po `reference`, bo to ono jest kluczem
 /// trasy — tak samo jak w SPA i w adresach z powiadomień.

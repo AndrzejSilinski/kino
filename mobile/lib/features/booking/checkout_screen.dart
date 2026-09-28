@@ -361,7 +361,17 @@ class _Paid extends StatelessWidget {
             Text('Rezerwacja ${booking.reference}'),
             Text(booking.total.formatted, style: theme.textTheme.titleMedium),
             const SizedBox(height: 24),
-            FilledButton(
+            // Po zakupie prowadzimy WPROST do biletu, a nie na ekran główny:
+            // pierwsza rzecz, której klient teraz chce, to kod QR. Ekran
+            // biletów dochodzi w tym samym bloku, więc przycisk nie prowadzi
+            // w pustkę.
+            FilledButton.icon(
+              onPressed: () => context.go(Routes.booking(booking.reference)),
+              icon: const Icon(Icons.confirmation_number_outlined),
+              label: const Text('Pokaż bilety'),
+            ),
+            const SizedBox(height: 8),
+            TextButton(
               onPressed: () => context.go(Routes.home),
               child: const Text('Wróć do repertuaru'),
             ),

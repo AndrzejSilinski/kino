@@ -53,8 +53,19 @@ class HomeScreen extends ConsumerWidget {
             ),
             FilledButton.tonal(
               onPressed: () => context.go(catalogPath),
-              child: const Text('Repertuar i bilety'),
+              child: const Text('Repertuar'),
             ),
+            // Historia zakupów tylko dla zalogowanych: rezerwacja zawsze ma
+            // właściciela (bookings.user_id jest NOT NULL), więc gościowi ten
+            // przycisk prowadziłby wyłącznie do komunikatu o zalogowaniu.
+            if (auth.status == AuthStatus.authenticated) ...<Widget>[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => context.go(Routes.bookings),
+                icon: const Icon(Icons.confirmation_number_outlined),
+                label: const Text('Moje bilety'),
+              ),
+            ],
           ],
         ),
       ),

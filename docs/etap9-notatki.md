@@ -884,3 +884,69 @@ padłby na pierwszym wejściu w bilet, choć odpowiedź jest poprawna. Teraz bra
 listę, a `cheapest` oddaje null, więc „od …” samo się nie pokazuje. Wniosek na stałe: przy modelu
 pisanym ręcznie sprawdzam w kodzie Resource'a, KTÓRE pola są warunkowe — z jednej odpowiedzi tego
 nie widać.
+
+## Blok I2 — ekrany historii zakupów i biletu
+
+### Decyzje
+
+**327. Plik podajemy SYSTEMOWI, a nie zapisujemy do katalogu publicznego.** `share_plus`
+i `path_provider` stoją za interfejsem `FileShare` — z tego samego powodu co Stripe (decyzja 315):
+oba rozmawiają z kodem natywnym, więc w `flutter test` ich nie ma, a ekran biletu MUSI być
+testowalny, bo to na nim klient stoi dziesięć minut przed seansem. PDF trafia najpierw do katalogu
+TYMCZASOWEGO aplikacji, nie do „Pobranych”: bilet jest przepustką na salę i nie ma powodu, żeby
+leżał w miejscu, do którego zagląda każda inna aplikacja. Kopię trwałą robi użytkownik, świadomie,
+przez systemowe okno udostępniania — które przy okazji pozwala jednym ruchem wysłać bilet mailem
+albo wrzucić do portfela, a zapis do wspólnego katalogu wymagałby na Androidzie 13+ osobnych
+uprawnień i tak czy tak kończył się tym samym pytaniem.
+
+**328. Kod QR pokazujemy TYLKO dla biletu ważnego.** Bilet wykorzystany niesie `qr_url` dalej, więc
+narysowanie kodu byłoby najprostszą rzeczą — i byłoby zaproszeniem do próby wejścia drugi raz,
+a odmowę przy bramce klient odebrałby jako awarię aplikacji albo oszustwo kina. Zamiast kodu
+piszemy wprost, kiedy bilet został zeskanowany. Gdy samego obrazu nie udaje się pobrać (wygasły
+token, brak sieci, limit 30 żądań na minutę), w jego miejsce wchodzi komunikat mówiący, że **bilet
+jest ważny niezależnie od tego, czy kod się teraz wyświetlił** — pusta ramka w tej jednej chwili
+jest najgorszą możliwą odpowiedzią.
+
+**329. Historia doczytuje się sama, ale awaria doczytywania zostaje w kaflu.** Doczytywanie siedzi
+w osobnym widgecie na końcu listy, który wykonuje jedno żądanie w chwili pojawienia się — bez
+progów w pikselach i bez nasłuchu przewijania. Dzięki temu nieudane doczytanie nie ma jak wpłynąć
+na listę nad nim (decyzja 325 widziana od strony ekranu): dwie widoczne rezerwacje zostają, a pod
+nimi pojawia się komunikat serwera i przycisk „Pokaż starsze” dokładnie tam, gdzie użytkownik
+patrzy. Żądanie idzie po klatce (`addPostFrameCallback`), bo zmiana stanu providera w `initState`
+unieważniłaby widget w czasie jego własnego budowania.
+
+**330. Po zakupie prowadzimy WPROST do biletu.** Ekran potwierdzenia płatności miał dotąd jeden
+przycisk — powrót do repertuaru. Pierwsza rzecz, której klient chce po zapłaceniu, to jednak kod
+QR, więc głównym przyciskiem jest teraz „Pokaż bilety”, a powrót do repertuaru zostaje jako
+drugorzędny. Na ekranie głównym „Repertuar i bilety” rozpadło się na „Repertuar” i „Moje bilety”,
+przy czym drugi pokazuje się tylko zalogowanym: rezerwacja zawsze ma właściciela
+(`bookings.user_id` jest NOT NULL), więc gościowi ten przycisk prowadziłby wyłącznie do komunikatu
+o zalogowaniu.
+
+### Pułapki
+
+**DX. `Image.errorBuilder` NIE dziedziczy `width`/`height` obrazu — a `ListView` montuje tylko to,
+co widać.** Cztery testy ekranu biletu padły dwa razy z rzędu i za pierwszym razem postawiłem złą
+hipotezę, więc warto zapisać obie.
+
+Pierwszy przebieg: `A RenderFlex overflowed by 20 pixels on the bottom` w zastępniku kodu QR.
+Uznałem, że obraz narzuca zastępnikowi swoje 220×220, a ja ustawiam je PONOWNIE i dokładam
+wypełnienie — więc wymiary usunąłem. Drugi przebieg pokazał, że to było nietrafione:
+`RenderFlex children have non-zero flex but incoming height constraints are unbounded`,
+a w ograniczeniach stało `0.0<=h<=Infinity`. Czyli `errorBuilder` dostaje ograniczenia RODZICA,
+a nie rozmiar obrazu — a rodzicem jest przewijana lista, więc wysokość jest nieograniczona.
+Prawdziwa przyczyna pierwszego błędu była prostsza: kwadrat 220 z wypełnieniem 16 z każdej strony
+daje treści 188 pikseli, a ikona 40 plus trzy linijki tekstu potrzebowały 208. Poprawka to jedno
+i drugie: zastępnik wymierza się SAM (tym samym bokiem, wyciągniętym do wspólnej stałej, żeby
+obraz i zastępnik nie odjechały od siebie), a jego treść mieści się w tym boku — mniejsza ikona,
+krótszy tekst, `Flexible` z `maxLines`. Nauczka metodologiczna jest ważniejsza od technicznej:
+komunikat o overflow mówi, ILE brakuje, ale nie mówi, KTO narzucił ograniczenia. To pokazuje
+dopiero wiersz `constraints:` w zrzucie — i jego trzeba przeczytać PRZED postawieniem hipotezy.
+
+Druga rzecz to moje złe założenie o teście, nie o aplikacji: `ListView` montuje tylko to, co jest
+w widoku (plus zapas), więc drugi bilet — leżący poniżej 600 pikseli domyślnego płótna testu —
+nie istniał w drzewie i `find.text('Miejsce A4')` słusznie nic nie znajdował. Przewijanie
+w każdym teście byłoby hałasem zaciemniającym intencję, więc testy tego ekranu ustawiają wyższy
+widok (`tester.view.physicalSize`) i mówią tym wprost: chcę widzieć CAŁY ekran. Wniosek na stałe:
+gdy test ekranu nie widzi czegoś, co „na pewno tam jest", najpierw sprawdzam, czy to nie leży
+poniżej 600. piksela.

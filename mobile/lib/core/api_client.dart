@@ -142,6 +142,35 @@ class ApiClient {
     throw error;
   }
 
+  /// Odpowiedź BINARNA: bajty pliku, nie koperta JSON.
+  ///
+  /// Nie idzie przez `_envelope`, bo ten dekoduje JSON, a tu treścią jest plik
+  /// (PDF z biletami). Wszystko inne zostaje takie samo: te same nagłówki,
+  /// czyli i token, i ta sama zamiana błędu na `ApiError` — bo przy statusie
+  /// poza 2xx serwer odpowiada zwykłą kopertą błędu, nie plikiem.
+  Future<List<int>> getBytes(
+    String path, {
+    Map<String, String>? headers,
+  }) async {
+    final Uri uri = config.apiUri(path);
+    final http.Response response = await _send(
+      () => _request('GET', uri, null, headers),
+      path,
+    );
+    if (response.statusCode >= 200 && response.statusCode < 300) {
+      return response.bodyBytes;
+    }
+    final ApiError error = ApiError.fromBody(
+      response.statusCode,
+      _decode(response, path),
+      retryAfter: parseRetryAfter(response.headers['retry-after']),
+    );
+    if (error.code == ApiError.unauthenticated) {
+      session?.onTokenRejected();
+    }
+    throw error;
+  }
+
   Future<http.Response> _request(
     String method,
     Uri uri,

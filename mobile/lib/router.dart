@@ -8,6 +8,8 @@ import 'package:cinema/features/auth/register_screen.dart';
 import 'package:cinema/features/catalog/cinema_list_screen.dart';
 import 'package:cinema/features/catalog/cinema_screen.dart';
 import 'package:cinema/features/booking/checkout_screen.dart';
+import 'package:cinema/features/bookings/booking_screen.dart';
+import 'package:cinema/features/bookings/bookings_screen.dart';
 import 'package:cinema/features/booking/seat_map_screen.dart';
 import 'package:cinema/features/catalog/screening_screen.dart';
 import 'package:cinema/features/diagnostics/diagnostics_screen.dart';
@@ -38,6 +40,14 @@ class Routes {
 
   /// `/screenings/338/checkout` — podsumowanie i płatność.
   static String checkout(int id) => '${screening(id)}/checkout';
+
+  /// `/bookings` — historia zakupów.
+  static const String bookings = '/bookings';
+
+  /// `/bookings/01M2R0FF9TF8JNNQ9GBNZJ3TDQ` — jedna rezerwacja z biletami.
+  /// Kluczem jest ULID, nie sekwencyjne id: po numerach dałoby się skanować
+  /// cudze zakupy, a ten sam adres działa w SPA i w linku z powiadomienia.
+  static String booking(String reference) => '$bookings/$reference';
 }
 
 final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
@@ -89,6 +99,18 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
         path: '/screenings/:id(\\d+)/checkout',
         builder: (BuildContext context, GoRouterState state) =>
             CheckoutScreen(screeningId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: Routes.bookings,
+        builder: (BuildContext context, GoRouterState state) =>
+            const BookingsScreen(),
+      ),
+      GoRoute(
+        // Wzorzec ULID-a: 26 znaków z alfabetu Crockforda, wielkie litery.
+        // Adres z powiadomienia albo z linku nie wpuści tu czegoś innego.
+        path: '${Routes.bookings}/:reference([0-9A-HJKMNP-TV-Z]{26})',
+        builder: (BuildContext context, GoRouterState state) =>
+            BookingScreen(reference: state.pathParameters['reference']!),
       ),
       GoRoute(
         path: Routes.diagnostics,

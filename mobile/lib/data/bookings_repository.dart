@@ -38,4 +38,12 @@ class BookingsRepository {
   /// Szczegóły rezerwacji wraz z biletami i seansem.
   Future<Booking> details(String reference) async =>
       Booking.fromJson(await _api.getJson('/bookings/$reference'));
+
+  /// PDF z biletami — bajty, nie adres.
+  ///
+  /// Serwer wymaga tu tokenu (rozpoznanie fazy 4: bez niego 401), więc plik
+  /// pobiera aplikacja, a nie przeglądarka systemowa otwierająca adres. To
+  /// zresztą ta sama zasada co przy obrazie kodu QR (decyzja 324).
+  Future<List<int>> ticketsPdf(String reference) =>
+      _api.getBytes('/bookings/$reference/tickets/pdf');
 }
