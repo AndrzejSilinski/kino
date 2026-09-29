@@ -1243,6 +1243,48 @@ z `builder` w `app.dart`, powiadomienia przestałyby cokolwiek otwierać, a test
 przechodziłby. Test montuje więc `CinemaApp` z podmienionym routerem — sprawdza nie tylko logikę,
 ale i to, że jest ona w ogóle podłączona.
 
+## Blok M3 — prawdziwa warstwa Firebase
+
+Rozpoznanie w źródłach przyniosło dwie rzeczy, które zmieniły zawartość bloku, i jedno sprostowanie
+tego, co sam wcześniej zapowiedziałem.
+
+**358. NIE rejestrujemy procedury obsługi wiadomości w tle.** `FcmPushSender` zawsze wysyła sekcję
+`notification` (tytuł i treść) — sprawdzone w kodzie serwera, nie założone. Taką wiadomość Android
+pokazuje SAM, gdy aplikacja jest w tle albo zamknięta, a kliknięcie wraca do nas przez
+`onMessageOpenedApp` albo `getInitialMessage`. Trzy stany aplikacji są więc obsłużone bez ani jednej
+linii w osobnej izolacji. `onBackgroundMessage` jest potrzebne dopiero dla wiadomości SAMYCH DANYCH,
+których nasz serwer nie wysyła, a kosztuje uruchomienie drugiej izolacji Darta przy każdym
+powiadomieniu — z własnym `Firebase.initializeApp()`, bo startuje pusta. Gdyby kiedyś doszła
+wiadomość cicha, dopisanie tej funkcji jest jedną zmianą w jednym pliku; dopisywanie jej teraz
+byłoby kodem, którego nic nie uruchamia.
+
+**359. Kanał powiadomień tworzymy przy KAŻDYM starcie aplikacji.** W źródle SDK Firebase
+(`CommonNotificationBuilder.getOrCreateChannel`) widać kolejność, o której dokumentacja nie mówi
+wprost: wpis `default_notification_channel_id` z manifestu jest brany pod uwagę **tylko wtedy, gdy
+kanał o tym identyfikatorze już istnieje**. Jeśli nie istnieje, SDK po cichu zakłada własny kanał
+`fcm_fallback_notification_channel` o nazwie „Misc" i wypisuje ostrzeżenie w logu, którego nikt nie
+czyta — a użytkownik dostaje powiadomienia w kategorii, której nie da się sensownie wyciszyć ani
+rozpoznać w ustawieniach. Tworzenie kanału jest idempotentne, więc najtańszą gwarancją jest robić
+to bezwarunkowo przy starcie. Identyfikator `cinema_bookings` siłą rzeczy występuje w dwóch
+miejscach — w kodzie Darta i w manifeście, bo manifest nie umie czytać Darta — i właśnie dlatego
+pilnuje go test dymny.
+
+**360. Osobna ikona powiadomienia, nie ikona aplikacji.** Android od wersji 5 traktuje małą ikonę
+powiadomienia jak MASKĘ: bierze z niej sam kształt i maluje go jednym kolorem. Ikona aplikacji
+użyta w tym miejscu zamienia się więc w białą plamę — częsty błąd, który wygląda jak uszkodzone
+powiadomienie. Stąd `ic_notification.xml`: biała sylwetka biletu na przezroczystym tle, rysowana
+wektorem (`fillType="evenOdd"` działa od API 24, a aplikacja i tak wymaga 24). Do tego kolor
+akcentu w `colors.xml` — ten sam fiolet co w aplikacji i w SPA.
+
+**SPROSTOWANIE: `POST_NOTIFICATIONS` NIE trafia do naszego manifestu.** Zapowiadałem, że blok doda
+to uprawnienie — i było to błędne. W manifestach obu wtyczek (`firebase_messaging` 16.7.0
+i `flutter_local_notifications` 22.3.1, oba przeczytane) uprawnienie jest już zadeklarowane
+i scalanie manifestów dokłada je do aplikacji. Powtórzenie wpisu niczego by nie zmieniło poza
+wrażeniem, że zależy od nas. To ta sama pomyłka co przy aparacie w bloku J, popełniona z tego
+samego powodu: „skoro potrzebujemy uprawnienia, to trzeba je zadeklarować" brzmi rozsądnie, dopóki
+nie sprawdzi się, kto już je deklaruje. Manifest dostał zamiast tego komentarz, żeby nikt nie dodał
+wpisu z tego samego odruchu.
+
 ### Pułapki
 
 **DZ. `prefer_initializing_formals` uderza także w atrapy testowe, a jej podpowiedzi czasem NIE DA

@@ -3,6 +3,12 @@
          potrzebuje go narzędzie Fluttera). Aplikacja rozmawia z API także
          w release, więc uprawnienie musi być w manifeście głównym. -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- POST_NOTIFICATIONS (wymagane od Androida 13) NIE jest tu deklarowane
+         ŚWIADOMIE: deklarują je manifesty obu wtyczek — firebase_messaging
+         i flutter_local_notifications — a scalanie manifestów dokłada je do
+         aplikacji. Sprawdzone w źródłach obu paczek na przypiętych wersjach.
+         Powtórzenie wpisu nic by nie dało poza wrażeniem, że uprawnienie
+         zależy od nas. O zgodę prosi ekran konta, przez FirebaseMessaging. -->
     <application
         android:label="Kino"
         android:name="${applicationName}"
@@ -36,6 +42,26 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Powiadomienia z FCM pokazane przez system, gdy aplikacja jest w tle
+             albo zamknięta (Etap 9, blok M3). Nazwy wpisów wzięte ze źródła SDK
+             (CommonNotificationBuilder: METADATA_DEFAULT_CHANNEL_ID, _ICON,
+             _COLOR), a nie z pamięci — literówka w nazwie nie daje żadnego
+             błędu, tylko ciche wpadnięcie w ustawienia domyślne.
+
+             UWAGA: kanał o tym identyfikatorze musi ISTNIEĆ, zanim przyjdzie
+             powiadomienie. Tworzy go aplikacja przy starcie (decyzja 359);
+             jeśli go nie ma, SDK zakłada własny kanał „Misc" i wypisuje
+             ostrzeżenie w logu. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="cinema_bookings" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_notification" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/notification_color" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

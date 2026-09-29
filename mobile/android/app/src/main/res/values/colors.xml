@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Kolor akcentu powiadomienia (Etap 9, blok M3).
+
+  Ten sam fiolet co `CinemaApp.seedColor` w aplikacji i co motyw SPA, żeby
+  powiadomienie na pasku wyglądało jak część tej samej aplikacji, a nie jak
+  komunikat systemu. Czyta go wtedy SDK Firebase (wpis
+  `default_notification_color` w manifeście), a nie kod Darta.
+-->
+<resources>
+    <color name="notification_color">#FF6D28D9</color>
+</resources>
