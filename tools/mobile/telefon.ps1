@@ -1,5 +1,10 @@
-# Telefon z Androidem przez adb (Etap 9, blok A). Uruchamiane w PowerShellu na Windowsie,
+﻿# Telefon z Androidem przez adb (Etap 9, blok A). Uruchamiane w PowerShellu na Windowsie,
 # NIE w WSL: port USB widzi Windows, a nie maszyna WSL.
+#
+# Plik zaczyna sie od znacznika BOM (EF BB BF) i to jest WYMAGANE, a nie przypadek:
+# Windows PowerShell 5.1 - domyslny na Windowsie - czyta pliki .ps1 jako ANSI, jesli
+# nie znajdzie BOM-u. Polskie znaki i myslnik w komunikatach rozsypuja sie wtedy tak,
+# ze skrypt nie przechodzi nawet parsowania (Etap 9, blok O, pulapka EC).
 #
 # Wymaga tylko Android SDK Platform-Tools (sam adb, kilka MB z dl.google.com) — bez Android
 # Studio i bez emulatora (decyzja 255). Domyślnie szuka adb w %USERPROFILE%\platform-tools.

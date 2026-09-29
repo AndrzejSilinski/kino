@@ -1314,3 +1314,116 @@ wejściu na ekran. Nauczka jest węższa niż „czytaj swój kod": **zanim napi
 jak wygląda `initState` w sąsiednim ekranie tego projektu** — bo jeżeli w projekcie jest już
 rozwiązany ten problem, to jest rozwiązany w konkretny sposób i warto go powtórzyć, a nie wymyślać
 drugi raz. Rozwiązanie: `WidgetsBinding.instance.addPostFrameCallback` ze sprawdzeniem `mounted`.
+
+## Blok N — weryfikacja na żywo
+
+Blok skończył się inaczej, niż był zaplanowany, i to jest ważniejsze niż jego wynik.
+
+**Co miało być:** powiadomienie na ekranie telefonu w trzech stanach aplikacji, z kliknięciem
+i deep linkiem, na jednym bilecie przechodzącym przez płatność, przypomnienie i odwołanie seansu.
+
+**Co się stało:** telefon nie dał się podłączyć przez `adb` (dwa kable, dwa gniazda), a po drodze
+okazało się, że na maszynie nie ma nawet Platform-Tools. Zamiast brnąć w sterowniki USB,
+zamieniliśmy dowód na inny — słabszy, ale prawdziwy.
+
+**Co zostało sprawdzone na żywo.** Łańcuch serwer → Google → FCM, przez prawdziwe żądanie wysyłki
+z konta serwisowego do projektu Firebase, z WYMYŚLONYM tokenem urządzenia. Odpowiedź:
+`status=invalid_token kod=UNREGISTERED`. Ta jedna linia dowodzi czterech rzeczy naraz: kontener
+PHP wyszedł do internetu, klucz prywatny wczytał się z zamontowanego katalogu sekretów i podpisał
+JWT wymieniony na token dostępu, projekt istnieje i klucz ma do niego prawo, a kształt ładunku
+HTTP v1 jest poprawny — bo odmowa dotyczy WYŁĄCZNIE nieistniejącego urządzenia. Gdyby cokolwiek
+w konfiguracji było nie tak, kod błędu byłby inny: `PERMISSION_DENIED` przy złym kluczu lub
+projekcie, `NETWORK_ERROR` przy braku wyjścia do sieci, wyjątek konfiguracji przy złej ścieżce.
+
+**Czego nie sprawdzono.** Wyświetlenia powiadomienia na ekranie Androida i kliknięcia w nie. Cała
+logika tej ścieżki ma testy z atrapą serwisu, ale sam odbiór na urządzeniu pozostaje do
+potwierdzenia — i tak jest to napisane w README, bo przemilczenie takiej luki jest gorsze niż
+sama luka.
+
+**Nauczka o samym planowaniu.** Plan zakładał, że narzędzia z bloku A nadal działają. Nie
+sprawdziłem tego przed ułożeniem sekwencji testu — a `adb` nie było w ogóle. Przy następnej
+weryfikacji na żywo pierwszym krokiem jest sprawdzenie NARZĘDZI, a dopiero potem układanie
+scenariusza: inaczej pisze się instrukcję do maszyny, która nie istnieje.
+
+### Pułapki
+
+**EB. 502 od nginxa po `docker compose restart php`.** Po zmianie w `.env` i restarcie samego PHP
+API przestało odpowiadać: wszystkie kontenery stały, PHP-FPM miał w logu „ready to handle
+connections", a `curl` dostawał 502. To odpowiedź NGINXA, nie aplikacji. Restart kontenera daje
+mu nowy adres IP w sieci Dockera, a nginx rozwiązał nazwę `php` raz, przy swoim starcie, i trzyma
+stary adres. Lekarstwo: `docker compose restart nginx` po każdym restarcie usług PHP — dokładnie
+to robi wykonawca paczek w kroku „Kontenery", i właśnie dlatego. Kosztowało trzy wymiany
+wiadomości, bo objaw (502) wskazywał na aplikację, a winna była warstwa przed nią.
+
+**EC. Windows PowerShell 5.1 czyta `.ps1` jako ANSI, nie UTF-8.** `telefon.ps1` z polskimi znakami
+w komentarzach i myślnikiem w komunikacie nie przeszedł nawet parsowania: „Missing closing `}`"
+i lawina błędów o nieoczekiwanych tokenach. Plik był poprawny — PowerShell widział inne bajty,
+niż w nim są, bo bez znacznika BOM zakłada stronę kodową systemu. Poprawka: plik zaczyna się od
+BOM-u (EF BB BF), a nagłówek mówi, że to wymóg, nie ozdoba. Nauczka szersza niż jeden skrypt:
+**narzędzie deweloperskie testuje się w tym środowisku, w którym będzie uruchamiane** — ten skrypt
+powstał w Etapie 9, ale do dziś nikt nie uruchomił go w domyślnym PowerShellu.
+
+**ED. `\`` w GNU grep to nie backtick, tylko kotwica początku bufora.** Test dymny bloku O
+zgłosił brak wiersza tabeli pakietów, którego w README nie brakowało. Wzorzec miał postać
+`flutter_riverpod\` \| 3.4.3` w apostrofach, więc do grepa trafił razem z odwrotnym ukośnikiem —
+a GNU rozumie `\`` jako „początek całego tekstu" (i `\'` jako koniec). Wzorzec żądał więc, żeby
+zaraz po nazwie pakietu zaczynał się plik. Lekcja jest o jedno piętro wyżej niż ten jeden znak:
+**sprawdzenie, które nie ma jak przejść, wygląda dokładnie tak samo jak sprawdzenie, które
+wykryło błąd** — i kosztuje tyle samo czasu co prawdziwa awaria. Dlatego każdy nowy wzorzec
+w teście dymnym uruchamiam najpierw u siebie, na pliku, który MA go spełniać.
+
+**EE. `\R` w PCRE bez modyfikatora `/u` rozcina litery „ą".** Sprawdzacz zgodności policzył testy
+Fluttera na plik i wyszły mu liczby MNIEJSZE niż prawdziwe, choć w tym samym przebiegu
+`flutter test` zgłosił komplet 315 zdanych. Przyczyna siedzi w jednym znaku wzorca: raport
+`--machine` to strumień zdarzeń JSON po jednym w linii, dzielony przez `preg_split('/\R/', ...)`.
+Bez modyfikatora `/u` PCRE dopasowuje `\R` do BAJTÓW końca linii, a wśród nich jest `0x85` (NEL) —
+który w UTF-8 jest DRUGIM bajtem litery „ą" (`C4 85`). Każde zdarzenie z „ą" w nazwie testu
+(a testy mają nazwy po polsku: „zamknięta", „błąd", „żądań") było więc rozcinane w środku słowa,
+`json_decode` odrzucał obie połówki i test przepadał z liczenia. Poprawka: `explode("\n", ...)`
+po normalizacji `\r\n`, bo dzielimy plik o znanym formacie, a nie dowolny tekst z internetu.
+
+Dwie nauczki, obie szersze niż ten błąd. Po pierwsze: **wzorzec „dowolny koniec linii" jest
+wygodny do czasu, gdy dane przestają być ASCII** — a w tym projekcie wszystko, co widzi
+użytkownik, jest po polsku. Po drugie: sprawdzacz podał wynik, który wyglądał na zwykłą
+rozbieżność w tabeli („README kłamie o liczbach"), a naprawdę był awarią samego narzędzia.
+Uratowało to, że w tym samym raporcie leżała **druga, niezależna miara** — `flutter test`
+zgłaszał 315. Gdyby jej nie było, poprawiłbym liczby w README pod zepsuty licznik.
+
+**EF. Test, który czyta lokalne `.env`, nie jest powtarzalny — i dowiadujesz się o tym najpóźniej.**
+Pełny zestaw PHP padł w bloku O na jednym teście, choć blok nie dotyka backendu ani jedną linią.
+Przyczyna była z zupełnie innego dnia: `ClientConfigApiTest` sprawdza CAŁĄ sekcję `push`
+w odpowiedzi, ustawiając jawnie wartości webowe, ale bloku ANDROID nie ustawiał wcale — brał to,
+co akurat jest w konfiguracji. Do dziś `FIREBASE_ANDROID_APP_ID` było puste, więc kontroler tego
+bloku nie dokładał i porównanie się zgadzało. Po skonfigurowaniu powiadomień na telefon zmienna
+przestała być pusta i ten sam test, bez żadnej zmiany w kodzie, zaczął zgłaszać różnicę.
+
+To nie jest usterka do obejścia przez „popraw oczekiwanie": zestaw testów, którego wynik zależy
+od `.env` maszyny, daje inny wynik u autora, inny u recenzenta i jeszcze inny w CI. Poprawka to
+jedna linia — `'push.android.app_id' => ''` — ale zasada jest ogólniejsza: **test sprawdzający
+całość odpowiedzi musi przypiąć KOMPLET wejść, także te, których „nie dotyczy"**. Dopóki wejście
+jest puste w każdym środowisku, brak przypięcia wygląda jak porządek; pierwsza niepusta wartość
+zamienia go w awarię w miejscu niezwiązanym ze zmianą.
+
+**EG. Polecenie diagnostyczne uruchomione jako INNY użytkownik zostawia śmieci, które psują
+kolejne przebiegi.** Po nieudanym pełnym zestawie poprosiłem o ręczne uruchomienie testów przez
+`docker compose exec php` — żeby zobaczyć nazwę nieudanego testu. Zestaw przeszedł (497 zdanych),
+ale następny przebieg wykonawcy padł na **czterech** testach panelu, z komunikatem
+`Failed to open directory: Permission denied` przy sprzątaniu
+`storage/framework/testing/disks/.../livewire-tmp`.
+
+Przyczyna: `docker compose exec` wchodzi do kontenera jako jego domyślny użytkownik, a wykonawca
+paczek uruchamia testy z `--user "$(id -u):$(id -g)"`, czyli jako użytkownik WSL. Moja komenda
+założyła katalogi testowe z cudzym właścicielem; kolejny przebieg nie mógł ich skasować i cztery
+testy przesyłania plakatu przewróciły się na sprzątaniu, a nie na tym, co sprawdzają.
+
+Dwie nauczki. Pierwsza, wąska: **polecenie diagnostyczne musi działać jako ten sam użytkownik co
+zwykły przebieg** — inaczej samo badanie zmienia stan badanego. Druga, szersza i ważniejsza:
+**nowe czerwone testy po zmianie, która ich nie dotyka, są sygnałem, żeby szukać przyczyny obok
+zmiany, a nie w niej.** Blok O nie tknął backendu, więc poprawianie czegokolwiek w kodzie byłoby
+naprawianiem niewinnego. Rozstrzygnęły dwa fakty: ten sam kod dawał raz 497 zdanych, raz 4 błędy,
+a komunikat mówił o prawach do katalogu, nie o logice. Sprzątnięcie katalogu przywraca porządek, ale
+kasować trzeba WĄSKO: `docker compose exec -u root php rm -rf storage/framework/testing/disks`.
+Pierwsza wersja tej komendy usuwała cały katalog `testing` — razem z `.gitignore`, który jest
+ŚLEDZONY przez gita, więc repozytorium przestawało być czyste i wykonawca słusznie odmawiał
+nałożenia łatki. Sprzątanie po awarii samo stało się drugą awarią; to ta sama lekcja co wyżej,
+tylko w drugą stronę: polecenie naprawcze też zmienia stan i też trzeba je przemyśleć.

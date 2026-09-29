@@ -73,5 +73,14 @@
         <env name="FIREBASE_WEB_APP_ID" value=""/>
         <env name="FIREBASE_MESSAGING_SENDER_ID" value=""/>
         <env name="FIREBASE_VAPID_PUBLIC_KEY" value=""/>
+        <!--
+            Etap 9, blok O (pułapka EF): blok ANDROID też musi być pusty w testach.
+            Przy dodaniu go w bloku K zmienne zostały poza tą listą, bo w .env były puste
+            i nic się nie działo. Pierwsza maszyna ze skonfigurowanymi powiadomieniami na
+            telefon dostała inny wynik zestawu niż autor — a test, którego wynik zależy od
+            .env, nie jest testem, tylko pomiarem cudzej konfiguracji.
+        -->
+        <env name="FIREBASE_ANDROID_APP_ID" value=""/>
+        <env name="FIREBASE_ANDROID_PACKAGE_NAME" value=""/>
     </php>
 </phpunit>

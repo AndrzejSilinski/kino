@@ -18,6 +18,11 @@ declare(strict_types=1);
  * Wynik: lista BRAK, liczniki i EXIT. Strażnik pułapki AW: kod 0 wymaga ZERO braków,
  * zgodnej tabeli testów i niepustego wyniku (co najmniej MIN_CHECKED sprawdzonych nazw).
  *
+ * Etap 9, blok O: także aplikacja mobilna — kod Darta (klasy, enumy, miksiny), zasoby Androida
+ * i pliki konfiguracyjne Gradle'a, oraz tabela testów Fluttera porównywana z raportem
+ * "flutter test --machine", który wykonawca paczek zostawia w mobile/build/etap9/test.json.
+ * Brak raportu = BRAK, tak samo jak przy Viteście.
+ *
  * Etap 8, blok O: także nazwy z frontu (frontend/src, frontend/public, package.json, konfiguracja
  * Vite i TypeScript), komponenty Vue i eksporty TypeScript jako "klasy", pliki po samej nazwie
  * (np. vHtmlGuard.spec.ts) oraz tabela testów Vitest porównywana z raportem JSON, który zapisuje
@@ -26,12 +31,14 @@ declare(strict_types=1);
 
 const MIN_CHECKED = 100;
 const VITEST_REPORT = 'frontend/node_modules/.cache/etap8/vitest.json';
+const FLUTTER_REPORT = 'mobile/build/etap9/test.json';
 const SEARCH_DIRS = ['backend/app', 'backend/config', 'backend/database', 'backend/routes', 'backend/resources',
     'backend/tests', 'backend/bootstrap', 'backend/public/js', 'backend/public/vendor/admin', 'docker', 'tools',
-    'frontend/src', 'frontend/public'];
+    'frontend/src', 'frontend/public', 'mobile/lib', 'mobile/test', 'mobile/android/app/src'];
 const SEARCH_FILES = ['docker-compose.yml', 'backend/.env.example', 'backend/phpunit.xml', 'backend/composer.json',
     'frontend/package.json', 'frontend/vite.config.ts', 'frontend/tsconfig.json', 'frontend/index.html', '.gitattributes',
-    'docker/secrets/.gitignore'];
+    'docker/secrets/.gitignore', 'mobile/pubspec.yaml', 'mobile/analysis_options.yaml', 'mobile/.gitignore',
+    'mobile/android/app/build.gradle.kts', 'mobile/android/settings.gradle.kts', 'mobile/android/build.gradle.kts'];
 
 $heading = $argv[1] ?? 'Etap 7';
 $readme = (string) @file_get_contents('README.md');
@@ -62,7 +69,7 @@ foreach (SEARCH_DIRS as $dir) {
             || (preg_match('#/(vendor|node_modules|dist)/#', $path) === 1 && ! str_starts_with($path, 'backend/public/vendor/admin'))) {
             continue;
         }
-        if ($file->isFile() && $file->getSize() < 2_000_000 && preg_match('/\.(php|js|mjs|ts|vue|css|html|json|ini|conf|sh|yml|yaml|xml|md|txt)$|SHA256SUMS$|\.gitignore$/', $path) === 1) {
+        if ($file->isFile() && $file->getSize() < 2_000_000 && preg_match('/\.(php|js|mjs|ts|vue|css|html|json|ini|conf|sh|yml|yaml|xml|md|txt|dart|kts|ps1)$|SHA256SUMS$|\.gitignore$/', $path) === 1) {
             $corpus[$path] = (string) file_get_contents($path);
         }
     }
@@ -87,6 +94,12 @@ $classFile = static function (string $class) use ($corpus): ?string {
         // Etap 8: komponent Vue (plik o tej nazwie) albo eksport TypeScript (klasa, interfejs, typ).
         if ((str_ends_with($path, '.vue') && basename($path, '.vue') === $class)
             || (str_ends_with($path, '.ts') && preg_match('/^export (?:default )?(?:abstract )?(?:class|interface|type|enum) '.preg_quote($class, '/').'\b/m', $text) === 1)) {
+            return $path;
+        }
+        // Etap 9: Dart. Modyfikatory bywają łączone ("abstract interface class PushService",
+        // "final class"), a enum i mixin są tu klasami tak samo jak class.
+        if (str_ends_with($path, '.dart')
+            && preg_match('/^(?:abstract |final |base |interface |sealed |mixin )*(?:class|enum|mixin) '.preg_quote($class, '/').'\b/m', $text) === 1) {
             return $path;
         }
     }
@@ -147,6 +160,47 @@ if (preg_match_all('/^\| `([A-Za-z0-9]+\.spec\.ts)` \| (\d+) \|/m', $section, $s
     if (preg_match('/^\| \*\*Razem Vitest\*\* \| \*\*(\d+)\*\* \|/m', $section, $vsum) === 1) {
         $all = is_array($vitest) ? (int) ($vitest['numTotalTests'] ?? -1) : -1;
         $pass('vitest', 'Razem Vitest = '.$vsum[1], (int) $vsum[1] === $all && $specTotal === $all, "Vitest zbiera {$all}, tabela sumuje {$specTotal}");
+    }
+}
+// Etap 9: tabela Fluttera "| `plik_test.dart` | N |" kontra raport "flutter test --machine".
+// Format raportu to strumień zdarzeń JSON (jedno na linię), a nie jeden dokument: liczymy
+// zakończone testy per plik, pomijając ukryte (ładowanie pliku testowego to też "test").
+if (preg_match_all('/^\| `([a-z0-9_]+_test\.dart)` \| (\d+) \|/m', $section, $dartRows, PREG_SET_ORDER) > 0) {
+    $dartCounts = [];
+    $suites = $testNames = [];
+    // Podział WYŁĄCZNIE po znaku nowej linii, nie przez \R: w PCRE bez modyfikatora /u
+    // \R dopasowuje także bajt 0x85 (NEL), a ten jest drugim bajtem litery "ą" (C4 85).
+    // Nazwy testów są po polsku, więc \R rozcinałby zdarzenia JSON w środku słowa,
+    // json_decode odrzucał obie połówki i liczby wychodziły za małe (pułapka EE).
+    $raport = str_replace("\r\n", "\n", (string) @file_get_contents(FLUTTER_REPORT));
+    foreach (explode("\n", $raport) as $line) {
+        if (! str_starts_with(trim($line), '{')) {
+            continue;
+        }
+        $event = json_decode($line, true);
+        if (! is_array($event)) {
+            continue;
+        }
+        if (($event['type'] ?? '') === 'suite') {
+            $suites[$event['suite']['id']] = basename((string) ($event['suite']['path'] ?? '?'));
+        } elseif (($event['type'] ?? '') === 'testStart' && ! str_starts_with((string) ($event['test']['name'] ?? ''), 'loading ')) {
+            $testNames[$event['test']['id']] = $suites[$event['test']['suiteID'] ?? -1] ?? '?';
+        } elseif (($event['type'] ?? '') === 'testDone' && ($event['hidden'] ?? false) === false) {
+            $file = $testNames[$event['testID']] ?? '?';
+            $dartCounts[$file] = ($dartCounts[$file] ?? 0) + 1;
+        }
+    }
+    $pass('flutter', 'raport '.FLUTTER_REPORT, $dartCounts !== [], 'uruchom testy aplikacji mobilnej przed sprawdzeniem');
+    $dartTotal = 0;
+    foreach ($dartRows as [, $file, $count]) {
+        $dartTotal += (int) $count;
+        $pass('flutter', "{$file} = {$count}", ($dartCounts[$file] ?? -1) === (int) $count, 'Flutter zbiera '.($dartCounts[$file] ?? 0));
+    }
+    $unlistedDart = array_diff(array_keys($dartCounts), array_column($dartRows, 1));
+    $pass('flutter', 'wszystkie pliki testów w tabeli', $unlistedDart === [], 'brak w tabeli: '.implode(', ', $unlistedDart));
+    if (preg_match('/^\| \*\*Razem Flutter\*\* \| \*\*(\d+)\*\* \|/m', $section, $dsum) === 1) {
+        $allDart = array_sum($dartCounts);
+        $pass('flutter', 'Razem Flutter = '.$dsum[1], (int) $dsum[1] === $allDart && $dartTotal === $allDart, "Flutter zbiera {$allDart}, tabela sumuje {$dartTotal}");
     }
 }
 if (preg_match('/^\| Etapy 1–\d+ \| (\d+) \|/mu', $section, $rest) === 1 && preg_match('/^\| \*\*Razem\*\* \| \*\*(\d+)\*\* \|/m', $section, $sum) === 1) {

@@ -3055,3 +3055,294 @@ repozytorium (jak sonda z Etapu 6) i piszą raporty z licznikiem porażek.
   120 minut przed seansem nie dostaje przypomnienia ani mailem, ani pushem.
 - **Powiadomienie o odwołaniu seansu przez kino** ma dziś tylko mail; kanał push i deep
   linki dojdą z aplikacją Flutter (Etap 9) na tym samym rejestrze urządzeń.
+
+## Etap 9 — aplikacja mobilna (Flutter, Android), powiadomienia push na telefonie
+
+Natywna aplikacja na Androida prowadzi tę samą ścieżkę zakupu co SPA: katalog kin i repertuar,
+interaktywny plan sali z blokadami miejsc na żywo, podsumowanie i płatność, bilety z kodami QR
+i PDF-em, konto ze zdjęciem z aparatu oraz powiadomienia push. Rozmawia z **tym samym API v1**
+co przeglądarka — bez jednego endpointu „dla mobile", bez osobnego kontraktu i bez drugiego
+zestawu kodów błędów.
+
+Skala: **71 plików i ~9 800 linii w `lib/`**, **48 plików testów i 315 testów** uruchamianych
+w tym samym kontenerze co budowanie APK.
+
+Zasada przewodnia jest ta sama co na froncie: **widget tylko wyświetla i zbiera dane**. Logika
+siedzi w repozytoriach, kontrolerach Riverpoda i czystych modułach, które nie importują ani
+`flutter/material.dart`, ani żadnej wtyczki natywnej — i dlatego dają się przetestować bez
+telefonu.
+
+### Dlaczego Flutter, a nie React Native
+
+Zadanie dopuszczało oba. Wybór padł na Fluttera z trzech powodów, z których tylko pierwszy jest
+o samej technologii:
+
+- **Jeden język na całą aplikację.** Dart z `strict-casts`, `strict-inference` i `strict-raw-types`
+  daje przy ręcznie pisanych modelach to samo, co TypeScript daje SPA: błąd kontraktu API wychodzi
+  w analizie statycznej, a nie w widgecie na telefonie.
+- **Przewidywalny rendering planu sali.** Sala na kilkaset miejsc to setki małych elementów
+  przerysowywanych przy każdym zdarzeniu WebSocket. Flutter rysuje wszystko własnym silnikiem,
+  więc zachowanie nie zależy od wersji komponentów systemowych producenta telefonu.
+- **Testy widgetów bez urządzenia i bez emulatora.** `flutter test` uruchamia pełne drzewo
+  widgetów na maszynie budującej. Cała ścieżka zakupu — od listy kin po kliknięcie
+  w powiadomienie — ma testy, które przechodzą w kontenerze w kilkanaście sekund.
+
+### Uruchomienie aplikacji mobilnej
+
+W WSL nie ma ani Fluttera, ani Android SDK — wszystko dzieje się w kontenerze przypiętym po
+digeście, tak samo jak npm na froncie.
+
+```bash
+# jednorazowo: obraz i wolumeny (SDK, pamięć podręczna pub i Gradle, klucz debug)
+sh tools/flutter/flutter.sh --przygotuj
+# zależności DOKŁADNIE z pubspec.lock
+sh tools/flutter/flutter.sh pub get --enforce-lockfile
+# analiza i testy
+sh tools/flutter/flutter.sh analyze --fatal-infos
+sh tools/flutter/flutter.sh test
+# APK z adresem API podanym przy budowaniu, nigdy ze stałej w kodzie
+sh tools/flutter/flutter.sh build apk --debug --dart-define=API_BASE_URL=http://localhost:8080
+```
+
+Telefon obsługuje `tools/mobile/telefon.ps1` **z PowerShella na Windowsie**, bo port USB widzi
+Windows, a nie maszyna WSL:
+
+```
+powershell -ExecutionPolicy Bypass -File tools\mobile\telefon.ps1 wszystko
+```
+
+Skrypt sprawdza stan urządzenia, ustawia `adb reverse tcp:8080 tcp:8080` i instaluje APK
+przez `adb install -r`. Przekierowanie portu jest tu kluczowe: dzięki niemu telefon widzi
+`localhost:8080` dokładnie tak jak przeglądarka w Windows, więc **kontrakt API i `APP_URL`
+zostają bez zmian** — adresy absolutne (plakaty, avatar, kod QR) działają bez otwierania
+portów w zaporze i bez drugiej konfiguracji „dla telefonu".
+
+| Pakiet | Wersja | Po co |
+|---|---|---|
+| `flutter_riverpod` | 3.4.3 | stan i wstrzykiwanie zależności, bez generatora kodu |
+| `go_router` | 18.0.1 | nawigacja po tych samych ścieżkach co SPA (deep linki) |
+| `http` | 1.6.0 | klient HTTP; własna warstwa na nim jest portem `http.ts` z SPA |
+| `flutter_secure_storage` | 11.2.0 | token bearer w Keystore, nie w SharedPreferences |
+| `web_socket_channel` | 3.0.3 | podstawa własnego, cienkiego klienta protokołu Pushera |
+| `flutter_stripe` | 14.0.0 | PaymentSheet (karta i BLIK) |
+| `firebase_core`, `firebase_messaging` | 4.15.0, 16.7.0 | rejestracja urządzenia i odbiór powiadomień |
+| `flutter_local_notifications` | 22.3.1 | pokazanie powiadomienia, gdy aplikacja jest na wierzchu |
+| `image_picker`, `flutter_image_compress` | 1.2.3, 2.5.1 | zdjęcie z aparatu i zmniejszenie przed wysłaniem |
+| `share_plus`, `path_provider` | 13.3.0, 2.1.6 | PDF z biletami przez systemowy arkusz udostępniania |
+
+Każda wersja jest **przypięta dokładnie** (bez `^`), a rozstrzyga `pubspec.lock` w gicie.
+
+### Architektura: pięć warstw i cztery ściany
+
+```
+lib/core/      klient API, błędy, sesja, magazyn, czas, pieniądze, ŚCIANY nad wtyczkami
+lib/models/    modele pisane ręcznie, ze strażnikami odczytu JSON
+lib/data/      repozytoria: jedyne miejsca, które znają adresy endpointów
+lib/state/     kontrolery Riverpoda — cała logika decyzji
+lib/features/  ekrany i widgety: wyświetlają i wołają metody
+```
+
+**Ściany nad warstwą natywną** to najważniejsza decyzja architektoniczna tego etapu. Cztery
+wtyczki rozmawiają z kodem natywnym, więc w `flutter test` po prostu ich nie ma. Każda dostała
+wąski interfejs w `mobile/lib/core/`, a testy podstawiają atrapę:
+
+| Interfejs | Prawdziwa implementacja | Co dzięki temu da się przetestować |
+|---|---|---|
+| `PaymentSheet` | `flutter_stripe` | anulowanie płatności, odmowa karty, wynik oczekujący |
+| `PhotoPicker` | `image_picker` + kompresja | rezygnacja z aparatu, odmowa systemu, zmniejszanie |
+| `FileShare` | `share_plus` | zapis PDF-u do katalogu tymczasowego i wywołanie arkusza |
+| `PushService` | `firebase_messaging` | zgoda, token, odświeżenie tokenu, trzy stany aplikacji |
+
+Bez tych ścian największe ryzyka aplikacji — odmowa uprawnienia, wymiana tokenu, anulowana
+płatność — byłyby sprawdzalne wyłącznie ręcznie na telefonie, czyli w praktyce niesprawdzane.
+
+**Modele pisane ręcznie**, bez generatora modeli. Każde pole przechodzi przez strażnika
+z `mobile/lib/core/json.dart`, który przy braku pola albo złym typie rzuca `ApiError` z kodem
+`INVALID_RESPONSE` i **miejscem, w którym kontrakt się rozjechał** (`client-config.booking.max_seats_per_session`).
+Generator dałby mniej kodu, ale błąd kontraktu objawiłby się jako wyjątek rzutowania gdzieś
+w widgecie, bez wskazania pola.
+
+### Ekrany i nawigacja
+
+`mobile/lib/router.dart` używa **tych samych ścieżek co SPA** (`/cinemas`, `/screenings/:id/seats`,
+`/bookings/:reference`). To nie kosmetyka: adres z powiadomienia push otwiera w aplikacji ten sam
+ekran co w przeglądarce, bez tłumaczenia ścieżek. Parametry mają wzorce (identyfikator tylko
+z cyfr, numer rezerwacji jako 26-znakowy ULID), więc adres z zewnątrz nie wpuści do aplikacji
+czegoś, co nie jest poprawnym identyfikatorem.
+
+### Czas rzeczywisty: własny klient protokołu Pushera
+
+Oficjalny `pusher_channels_flutter` nie pozwala ustawić hosta, więc z Reverbem nie działa.
+Zamiast tego `mobile/lib/core/realtime_socket.dart` mówi protokołem Pushera wprost przez WebSocket:
+`pusher:connection_established`, `pusher:subscribe`, ping i pong, ponowne łączenie z narastającym
+opóźnieniem. Kanały prywatne autoryzuje `broadcast_auth_repository.dart` przez
+`POST /api/v1/broadcasting/auth` — jedyny endpoint w tym API, który oddaje odpowiedź **bez
+koperty** `data`, bo tego wymaga protokół.
+
+### Powiadomienia push: trzy stany aplikacji
+
+Serwer zawsze wysyła wiadomość z sekcją `notification` (tytuł i treść) oraz sekcją `data`
+(`type` i `url`). To rozstrzyga, kto pokazuje powiadomienie:
+
+| Stan aplikacji | Kto pokazuje powiadomienie | Skąd aplikacja dostaje kliknięcie |
+|---|---|---|
+| na pierwszym planie | **my sami**, przez `flutter_local_notifications` | własny strumień i `payload` z adresem |
+| w tle | system Android | `onMessageOpenedApp` |
+| zamknięta | system Android | `getInitialMessage()` przy starcie |
+
+Dzięki temu **nie potrzebujemy procedury obsługi w tle** (osobnej izolacji Darta): jest ona
+konieczna dopiero dla wiadomości samych danych, których nasz serwer nie wysyła, a kosztuje
+uruchomienie drugiej izolacji przy każdym powiadomieniu.
+
+Trzy rzeczy, które wyszły dopiero z czytania źródeł, a nie z dokumentacji:
+
+- **Kanał powiadomień musi istnieć, zanim przyjdzie wiadomość.** Wpis
+  `com.google.firebase.messaging.default_notification_channel_id` w manifeście jest brany pod
+  uwagę **tylko wtedy, gdy kanał o tym identyfikatorze już utworzono**; w przeciwnym razie SDK po
+  cichu zakłada własny kanał „Misc". Dlatego `PushService` tworzy kanał przy każdym starcie —
+  operacja jest idempotentna.
+- **Mała ikona powiadomienia jest maską.** Android bierze z niej sam kształt i maluje jednym
+  kolorem, więc ikona aplikacji zamieniłaby się w białą plamę. Stąd osobny wektor
+  `ic_notification.xml` (biała sylwetka biletu) i kolor akcentu w `colors.xml`.
+- **`POST_NOTIFICATIONS` deklarują manifesty obu wtyczek**, więc w manifeście aplikacji go NIE ma;
+  scalanie manifestów dokłada je samo. O zgodę prosi ekran konta, przez `firebase_messaging`.
+
+**Deep linki prowadzą tylko tam, gdzie na pewno jest ekran.** Adres z sekcji `data` to dana
+z sieci: sprawdzamy kształt (jeden ukośnik na początku, bez schematu, bez `..`, wąski zbiór
+znaków), a potem pytamy `Routes`, czy taka trasa w ogóle istnieje. Nieznany adres znaczy „po
+prostu otwórz aplikację" — inaczej kliknięcie w powiadomienie kończyłoby się ekranem błędu
+routera. Kopii wzorców tras pilnuje test liczący trasy w `mobile/lib/router.dart`.
+
+**Zgody są trzy i nie wolno ich mylić**: zgoda na koncie (wspólna dla wszystkich urządzeń
+klienta), zgoda systemu na tym telefonie i rejestracja urządzenia na serwerze. Powiadomienie
+dostaje urządzenie, które ma wszystkie trzy. Sekcja „Powiadomienia" na ekranie konta ma dlatego
+**sześć stanów**, a nie jeden przełącznik: telefon bez Usług Google, kino bez skonfigurowanej
+wysyłki i odmowa systemu na stałe wyglądałyby identycznie — jako przycisk, który wraca na miejsce
+bez słowa wyjaśnienia.
+
+### Konfiguracja Firebase
+
+Aplikacja bierze konfigurację z `google-services.json` wkompilowanego w APK; serwer wysyła
+przez konto serwisowe. Oba pliki są **poza repozytorium**.
+
+1. W konsoli Firebase, **w tym samym projekcie co aplikacja webowa**, dodaj aplikację Android
+   z nazwą pakietu `pl.silinski.cinema` (SHA-1 niepotrzebny do powiadomień).
+2. Pobrany `google-services.json` zapisz w `mobile/android/app/`.
+3. Klucz prywatny konta serwisowego (Ustawienia projektu → Konta usługi) zapisz
+   w `docker/secrets/` — katalog jest montowany do kontenerów tylko do odczytu.
+4. W `backend/.env` ustaw `PUSH_ENABLED`, `FCM_PROJECT_ID`, `FCM_CREDENTIALS`,
+   `FIREBASE_ANDROID_APP_ID` i `FIREBASE_ANDROID_PACKAGE_NAME`.
+
+Wtyczka Google Services stosuje się **warunkowo**: bez `google-services.json` build przechodzi,
+a aplikacja zachowuje się jak na telefonie bez Usług Google — pokazuje „powiadomienia
+niedostępne" zamiast się wywracać.
+
+**Ekran diagnostyczny porównuje projekt aplikacji z projektem serwera.** To jedyne miejsce,
+w którym widać pomyłkę polegającą na zbudowaniu APK z innego projektu Firebase, niż ten,
+z którego wysyła serwer: rejestracja urządzenia przechodzi, token wygląda poprawnie, nic nie
+miga na czerwono, a powiadomienia nigdy nie dochodzą.
+
+### Backend w Etapie 9
+
+Aplikacja mobilna potrzebowała dwóch rzeczy, których serwer jeszcze nie miał:
+
+- **Blok `push.android` w konfiguracji klienta** (`GET /api/v1/client-config`) oraz rozdzielenie
+  stanu kanału push od kompletności konfiguracji **webowej**. Wcześniej kino bez aplikacji
+  webowej widziało push jako wyłączony także na telefonie.
+- **Odwołanie seansu RAZEM z rezerwacjami** w panelu. Do tej pory seans z rezerwacjami wymagał
+  anulowania każdej osobno, z osobnym powodem — przy pełnej sali kilkuset kliknięć. Nowa usługa
+  robi to jednym przebiegiem, ale **nie rozmawia z operatorem płatności w pętli**: wykonuje krok
+  bazodanowy (miejsca wracają do sprzedaży, klient dostaje powiadomienie), a rozliczenie zwrotów
+  zostawia komendzie `cinema:bookings:retry-refunds`, która i tak przebiega co pięć minut.
+  Każda rezerwacja w osobnej transakcji; awaria jednej nie przerywa reszty, ale **blokuje
+  odwołanie seansu** — inaczej ktoś zostałby z ważnym biletem na seans, którego nie ma.
+  Powiadomienie o odwołaniu idzie teraz mailem **i** pushem, na tym samym rejestrze urządzeń.
+
+### Testy
+
+| Plik testów | Testy |
+|---|---|
+| `account_repository_test.dart` | 4 |
+| `account_screen_test.dart` | 8 |
+| `account_test.dart` | 14 |
+| `api_client_multipart_test.dart` | 3 |
+| `api_client_session_test.dart` | 6 |
+| `api_client_test.dart` | 8 |
+| `app_config_test.dart` | 10 |
+| `auth_test.dart` | 4 |
+| `booking_channel_test.dart` | 4 |
+| `booking_event_test.dart` | 6 |
+| `booking_repository_test.dart` | 6 |
+| `booking_screen_test.dart` | 5 |
+| `booking_test.dart` | 5 |
+| `bookings_repository_test.dart` | 4 |
+| `bookings_screen_test.dart` | 5 |
+| `bookings_test.dart` | 7 |
+| `broadcast_auth_repository_test.dart` | 3 |
+| `cart_test.dart` | 5 |
+| `catalog_repository_test.dart` | 5 |
+| `checkout_repository_test.dart` | 5 |
+| `checkout_screen_test.dart` | 10 |
+| `checkout_test.dart` | 21 |
+| `cinema_screen_test.dart` | 3 |
+| `cinema_test.dart` | 2 |
+| `cinema_time_test.dart` | 6 |
+| `client_config_test.dart` | 4 |
+| `countdown_test.dart` | 4 |
+| `devices_repository_test.dart` | 9 |
+| `diagnostics_screen_test.dart` | 6 |
+| `login_screen_test.dart` | 3 |
+| `money_test.dart` | 2 |
+| `page_test.dart` | 5 |
+| `push_links_test.dart` | 7 |
+| `push_settings_test.dart` | 6 |
+| `push_test.dart` | 21 |
+| `realtime_badge_test.dart` | 4 |
+| `realtime_test.dart` | 12 |
+| `router_test.dart` | 3 |
+| `screening_test.dart` | 6 |
+| `seat_event_test.dart` | 5 |
+| `seat_map_screen_test.dart` | 13 |
+| `seat_map_test.dart` | 12 |
+| `seat_realtime_test.dart` | 8 |
+| `seat_selection_test.dart` | 13 |
+| `selected_cinema_test.dart` | 2 |
+| `ticket_test.dart` | 8 |
+| `user_test.dart` | 2 |
+| `widget_test.dart` | 1 |
+| **Razem Flutter** | **315** |
+
+Po stronie serwera Etap 9 dołożył testy odwołania seansu z rezerwacjami i konfiguracji push
+dla Androida; pełny zestaw PHPUnit ma **497 testów**.
+
+### Weryfikacja na żywo — co sprawdzone, a czego nie
+
+Uczciwy stan na koniec etapu, bo to pytanie padnie:
+
+**Sprawdzone na żywo.** Łańcuch *serwer → Google → FCM*: prawdziwe żądanie wysyłki z konta
+serwisowego do projektu Firebase, zakończone odpowiedzią `UNREGISTERED` na wymyślony token
+urządzenia. Ta odpowiedź dowodzi, że kontener wyszedł do sieci, klucz prywatny podpisał JWT
+i został wymieniony na token dostępu, projekt się zgadza, a kształt ładunku HTTP v1 jest
+poprawny — odmowa dotyczy **wyłącznie** nieistniejącego urządzenia.
+
+**Niesprawdzone na urządzeniu.** Wyświetlenie powiadomienia na ekranie Androida w trzech stanach
+aplikacji i kliknięcie w nie. Powód jest prozaiczny: telefon nie dał się podłączyć przez `adb`
+(dwa kable, dwa gniazda). Cała logika tej ścieżki ma testy z atrapą serwisu — odmowa zgody,
+wymiana tokenu, wyrejestrowanie, walidacja adresu, nawigacja po kliknięciu — ale sam odbiór
+na urządzeniu pozostaje do potwierdzenia.
+
+### Znane ograniczenia i co zrobiłbym mając więcej czasu
+
+- **Tylko Android.** iOS wymagałby konta dewelopera Apple, certyfikatów APNs i maszyny z macOS;
+  kod poza `ic_notification.xml` i manifestem jest wieloplatformowy.
+- **APK tylko w wersji debug**, podpisany kluczem debug z wolumenu. Podpis wydania, minifikacja
+  i CI to Etap 10; reguły dla Stripe'a i Fluttera leżą już w `proguard-rules.pro`.
+- **Adres API z parametru budowania** znaczy, że jeden APK mówi do jednego serwera. Przy wydaniu
+  właściwym adres byłby stały, a `adb reverse` przestałby być potrzebny.
+- **Brak trybu offline.** Bez sieci aplikacja pokazuje komunikat i przycisk ponowienia; nie
+  buforuje repertuaru ani biletów. Kod QR jest pobierany z serwera, więc bilet bez sieci się nie
+  wyświetli — a to najbardziej dotkliwy brak, bo w kinie bywa słaby zasięg.
+- **Powiadomienia ciche nie są obsługiwane** (świadomie, patrz wyżej); ich dodanie to jedna
+  funkcja najwyższego poziomu i rejestracja przed `runApp`.
+- **Identyfikator kanału powiadomień występuje w dwóch miejscach** — w kodzie Darta i w manifeście
+  — bo manifest nie umie czytać Darta. Pilnuje tego test dymny bloku.

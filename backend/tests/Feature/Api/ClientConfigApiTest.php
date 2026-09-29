@@ -45,6 +45,12 @@ final class ClientConfigApiTest extends TestCase
             'push.web.messaging_sender_id' => '1234567890',
             'push.web.vapid_public_key' => 'BPublicznyKluczVapid',
             'push.fcm.credentials' => '/run/secrets/cinema/firebase-service-account.json',
+            // Blok ANDROID wyciszamy JAWNIE, choć ten test go nie dotyczy (ma własny niżej).
+            // Bez tej linii wynik zależałby od tego, czy uruchamiająca maszyna ma w .env
+            // wypełnione FIREBASE_ANDROID_APP_ID: u kogoś z konfiguracją pod telefon
+            // kontroler dokłada blok `android`, a porównanie całej sekcji `push` przestaje
+            // się zgadzać. Test czytający lokalne .env nie jest powtarzalny (pułapka EF).
+            'push.android.app_id' => '',
         ];
         config($web);
 
