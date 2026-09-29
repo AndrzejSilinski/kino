@@ -4,6 +4,16 @@
 // API przeglądarki, VAPID). Aplikacja na Androidzie bierze konfigurację
 // Firebase z `google-services.json` wkompilowanego w APK (decyzja 292), więc
 // gdybyśmy jej tu użyli, telefon rejestrowałby się jako urządzenie webowe.
+//
+// Blok `push.android` (Etap 9, blok K) czytamy — ale NIE po to, żeby się nim
+// skonfigurować (patrz wyżej), tylko żeby móc PORÓWNAĆ. Jeśli serwer wysyła
+// z projektu „kino-prod", a aplikację zbudowano z pliku projektu „kino-test",
+// rejestracja urządzenia przejdzie bez błędu, token będzie wyglądał poprawnie
+// i wszystko będzie wyglądać dobrze — a powiadomienia po prostu nigdy nie
+// dojdą, bo token z jednego projektu jest w drugim nieznany. To awaria bez
+// żadnego komunikatu, najgorszy możliwy rodzaj; ekran diagnostyczny wykrywa ją
+// przez porównanie tych wartości (blok M2). Blok bywa nieobecny i to NIE
+// znaczy, że push nie działa (decyzja 354).
 
 import 'package:cinema/core/json.dart';
 
@@ -13,9 +23,12 @@ class ClientConfig {
     required this.realtime,
     required this.booking,
     required this.pushEnabled,
+    this.android,
   });
 
   factory ClientConfig.fromJson(Map<String, Object?> data) {
+    final Map<String, Object?> push = jsonChild(data, 'push', 'client-config');
+    final Object? android = push['android'];
     return ClientConfig(
       apiVersion: jsonString(data, 'api_version', 'client-config'),
       realtime: RealtimeConfig.fromJson(
@@ -24,11 +37,15 @@ class ClientConfig {
       booking: BookingConfig.fromJson(
         jsonChild(data, 'booking', 'client-config'),
       ),
-      pushEnabled: jsonBool(
-        jsonChild(data, 'push', 'client-config'),
-        'enabled',
-        'client-config.push',
-      ),
+      pushEnabled: jsonBool(push, 'enabled', 'client-config.push'),
+      // Bloku nie ma, gdy wdrożenie nie wypełniło zmiennych opisowych projektu
+      // — wtedy nie mamy z czym porównywać i tyle. Gdyby przyszedł w innym
+      // kształcie niż obiekt, to już błąd kontraktu i strażnik go zgłosi.
+      android: android == null
+          ? null
+          : AndroidPushConfig.fromJson(
+              jsonMap(android, 'client-config.push.android'),
+            ),
     );
   }
 
@@ -36,6 +53,38 @@ class ClientConfig {
   final RealtimeConfig realtime;
   final BookingConfig booking;
   final bool pushEnabled;
+
+  /// Projekt Firebase, z którego wysyła SERWER — do porównania z tym,
+  /// z którego zbudowano aplikację. Null, gdy serwer go nie podał.
+  final AndroidPushConfig? android;
+}
+
+/// Dane projektu Firebase po stronie serwera (blok K).
+class AndroidPushConfig {
+  const AndroidPushConfig({
+    required this.projectId,
+    required this.appId,
+    required this.packageName,
+  });
+
+  factory AndroidPushConfig.fromJson(Map<String, Object?> json) {
+    const String where = 'client-config.push.android';
+    return AndroidPushConfig(
+      projectId: jsonString(json, 'project_id', where),
+      appId: jsonString(json, 'app_id', where),
+      packageName: jsonString(json, 'package_name', where),
+    );
+  }
+
+  /// Identyfikator projektu, np. `kino-prod`. Jawny z natury — jest w każdym
+  /// `google-services.json` rozprowadzanym razem z aplikacją.
+  final String projectId;
+
+  /// Identyfikator aplikacji Android w tym projekcie (`1:…:android:…`).
+  final String appId;
+
+  /// Nazwa pakietu, dla której wydano `app_id`, np. `pl.silinski.cinema`.
+  final String packageName;
 }
 
 /// Dane połączenia WebSocket. Klucz Reverba jest jawny z natury (trafia do

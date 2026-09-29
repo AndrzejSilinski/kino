@@ -26,6 +26,12 @@ class StoreKeys {
 
   static const String token = 'auth_token';
   static const String bookingSession = 'booking_session_id';
+
+  /// Urządzenie push tej instalacji: `{"id": ULID, "token": token FCM}`
+  /// (blok M, decyzja 353). Token FCM to identyfikator instalacji, nie hasło —
+  /// ale leży tu, bo to ten sam magazyn i ta sama zasada: nic z tego nie ma
+  /// prawa trafić do SharedPreferences ani do kopii zapasowej.
+  static const String pushDevice = 'push_device';
 }
 
 class KeystoreSecureStore implements SecureStore {

@@ -104,6 +104,12 @@ class AuthController extends Notifier<AuthState> {
     } on ApiError {
       // Brak sieci albo token już nieważny — i tak czyścimy stan lokalny.
     }
+    // Urządzenie push należy do TOKENU, a nie do konta: serwer usunął je razem
+    // z tokenem Sanctum (ON DELETE CASCADE), więc zostaje posprzątanie u siebie.
+    // Bez tego zapis w Keystore przeżyłby wylogowanie i następna osoba, która
+    // zaloguje się na tym telefonie, zobaczyłaby „powiadomienia włączone" dla
+    // urządzenia, którego na serwerze już nie ma (decyzja 353).
+    await ref.read(pushProvider.notifier).forget();
     await _session.clearToken();
     state = const AuthState(status: AuthStatus.anonymous);
   }

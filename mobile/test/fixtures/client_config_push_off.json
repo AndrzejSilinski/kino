@@ -1,0 +1,19 @@
+{
+  "_zrodlo": "Odpowiedź serwera z wyłączonym kanałem push — ClientConfigController::push() oddaje wtedy sam 'enabled: false' i ANI JEDNEGO bloku konfiguracji (Etap 9, blok K). Tak wygląda wdrożenie bez konta serwisowego Firebase.",
+  "data": {
+    "api_version": "v1",
+    "realtime": {
+      "broadcaster": "reverb",
+      "key": "testowyKluczReverba",
+      "path": "/app"
+    },
+    "booking": {
+      "seat_lock_ttl_seconds": 600,
+      "max_seats_per_session": 10,
+      "payment_window_seconds": 600
+    },
+    "push": {
+      "enabled": false
+    }
+  }
+}

@@ -1147,3 +1147,85 @@ Livewire, do której nie prowadzi nic z interfejsu, jest nadal wywoływalna z pr
 jej tylko autoryzacja. Trzymanie dwóch dróg do tej samej operacji, z których jedna pomija
 potwierdzenie z liczbami, przeczyłoby decyzji 347. Trzy testy, które jej używały, przeszły na nową
 ścieżkę; zasadę „seans ma rezerwacje" nadal pilnuje test na poziomie usługi.
+
+## Blok M — powiadomienia push w aplikacji (część M1: rejestracja urządzenia)
+
+Rozpoznanie zaczęło się od czytania ŹRÓDEŁ dwóch paczek na przypiętych wersjach, bo obie zmieniały
+API między wydaniami, a zgadywanie kosztowało już trzy razy w blokach H–J. Znaleziska, które
+inaczej wyszłyby dopiero przy kompilacji albo — gorzej — na telefonie:
+
+- `firebase_messaging` 16.7.0: `AuthorizationStatus` ma **pięć** wartości, nie trzy
+  (`authorized`, `denied`, `notDetermined`, `provisional`, `deniedPermanently`), więc każdy
+  wyczerpujący `switch` musi obsłużyć wszystkie; `onTokenRefresh` jest na INSTANCJI, a `onMessage`
+  i `onMessageOpenedApp` są STATYCZNE; `getInitialMessage()` oddaje powiadomienie tylko RAZ;
+  procedura obsługi w tle musi być funkcją najwyższego poziomu z `@pragma('vm:entry-point')`,
+  zarejestrowaną przed `runApp`, i sama wywołuje `Firebase.initializeApp()` — bo działa
+  w osobnej izolacji, w której nic z aplikacji nie jest zainicjowane.
+- `flutter_local_notifications` 22.3.1: `initialize` przyjmuje ustawienia przez parametr
+  **nazwany** (`settings:`), `show(...)` ma wszystkie parametry nazwane, a `requestPermission()`
+  nazywa się teraz `requestNotificationsPermission()`.
+
+### Decyzje
+
+**349. Warstwa natywna powiadomień za interfejsem, jak Stripe i aparat.** `firebase_messaging`
+i `flutter_local_notifications` rozmawiają z kodem natywnym, więc w `flutter test` ich nie ma.
+Ale wszystko, co w powiadomieniach cokolwiek ROZSTRZYGA — kiedy pytać o zgodę, kiedy rejestrować
+urządzenie, co zrobić z nowym tokenem, gdzie zaprowadzić po kliknięciu — jest logiką, nie warstwą
+natywną. Za interfejsem `PushService` daje się ją przejść w testach w całości, razem ze ścieżkami,
+których na telefonie nie zobaczyłbym prawie nigdy: odmową zgody na stałe, brakiem tokenu i tokenem
+wymienionym w środku sesji. Do czasu bloku M2 pod providerem stoi `NoPushService`, który mówi
+„to urządzenie nie odbierze push" — aplikacja zachowuje się wtedy dokładnie jak telefon bez Usług
+Google, a nie jak zepsuta.
+
+**350. Powiadomienie normalizujemy przy samym wejściu.** `RemoteMessage.data` to mapa wartości
+`dynamic` prosto z sieci. Gdyby wędrowała przez aplikację w tej postaci, każdy odczyt byłby cichym
+rzutowaniem — `strict-casts` tego nie złapie, bo mapa `dynamic` obchodzi go legalnie. Jeden
+konstruktor sprawdza wszystko raz i oddaje `PushNotification` o znanych typach; reszta aplikacji
+nie wie, że FCM w ogóle istnieje.
+
+**351. Adres z powiadomienia jest daną z sieci, nie ścieżką.** Wiadomość FCM przychodzi spoza
+aplikacji, a sekcja `data` jest dowolna — mając sam token urządzenia, da się wysłać w niej
+cokolwiek. Dlatego przyjmujemy WYŁĄCZNIE ścieżkę wewnątrz aplikacji: jeden ukośnik na początku
+(`//host` to już cudzy serwer), żadnego schematu (`intent:`, `javascript:`, `https:`), żadnych
+`..`, wąski zbiór znaków, ograniczona długość. Bez tego kliknięcie w powiadomienie byłoby wejściem,
+przez które da się wysłać użytkownika, gdzie się chce. Czy pod ścieżką cokolwiek jest, rozstrzyga
+router (wzorce w `Routes`) — walidacja pilnuje tylko KSZTAŁTU i nie udaje, że zna trasy.
+
+**352. Trzy zgody, których nie wolno mylić** — te same co w SPA (Etap 8, blok L), bo to ten sam
+system, tylko inny klient: zgoda na koncie (`push_enabled`, wspólna dla wszystkich urządzeń),
+zgoda systemu na TYM telefonie i rejestracja urządzenia na serwerze. Powiadomienie dostaje
+urządzenie, które ma wszystkie trzy. „Włącz" ustawia je razem; „Wyłącz" zdejmuje TYLKO rejestrację
+— zgody na koncie nie ruszamy, bo należy również do przeglądarki klienta, a zgody systemowej i tak
+nie da się cofnąć z kodu.
+
+**353. Zapis `{id, token}` w Keystore, obok tokenu logowania.** `id` (ULID) jest potrzebne do
+wyrejestrowania, bo serwer świadomie nie oddaje tokenu w żadnej odpowiedzi. Zapamiętany token jest
+jedynym sposobem, żeby rozpoznać, że FCM wydał nowy — a bez tego porównania każde odświeżenie
+zakładałoby nowy wiersz i klient dostawałby to samo powiadomienie dwa razy, potem trzy. Przy
+wylogowaniu zapis znika: urządzenie należy do TOKENU Sanctum i serwer skasował je sam
+(ON DELETE CASCADE), więc zapis, który by to przeżył, pokazywałby następnej osobie na tym telefonie
+„powiadomienia włączone" dla urządzenia, którego nie ma.
+
+**354. O dostępności push rozstrzyga `push.enabled`, a NIE obecność bloku `push.android`.**
+To rozróżnienie z bloku K: `enabled` mówi, czy serwer ma czym wysyłać, a blok `android` to tylko
+dane projektu Firebase. Czytamy je po to, żeby PORÓWNAĆ: jeśli serwer wysyła z projektu
+„kino-prod", a aplikację zbudowano z `google-services.json` projektu „kino-test", rejestracja
+przejdzie bez błędu, token będzie wyglądał poprawnie i nic nie zamiga na czerwono — a powiadomienia
+nigdy nie dojdą, bo token z jednego projektu jest w drugim nieznany. To awaria bez komunikatu,
+najgorszy możliwy rodzaj, i właśnie dlatego trafia do ekranu diagnostycznego (blok M2). Gdyby brak
+tego bloku wyłączał push, wdrożenie, które nie wypełniło dwóch zmiennych opisowych, przestałoby
+dostawać powiadomienia bez żadnego powodu.
+
+### Pułapki
+
+**DZ. `prefer_initializing_formals` uderza także w atrapy testowe, a jej podpowiedzi czasem NIE DA
+SIĘ zastosować.** Blok M1 zatrzymał się na jednej informacji z `flutter analyze --fatal-infos`:
+w atrapie serwisu push konstruktor przyjmował nazwany parametr `permission` i przypisywał go
+w liście inicjalizacyjnej do prywatnego pola `_permission`. Reguła zaproponowała zamianę na
+`this._permission` — a tego zapisać się nie da, bo **nazwany parametr nie może zaczynać się od
+podkreślenia**; próba skończyłaby się już nie informacją, tylko błędem składni. Wyjściem nie jest
+też nazwanie pola tak jak metody interfejsu (`permission()` już istnieje). Rozwiązanie: pole
+publiczne o innej nazwie (`systemPermission`) i zwykły parametr inicjalizujący `this.systemPermission`
+— przy okazji test może je podejrzeć po prośbie o zgodę. Ogólniejsza nauczka, ta sama co w DY:
+przy `--fatal-infos` analizator nie rozróżnia „kodu produkcyjnego" i „pomocnika testowego",
+a plik w `test/fixtures/` przechodzi dokładnie te same reguły co `lib/`.

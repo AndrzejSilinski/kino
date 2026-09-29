@@ -5,11 +5,14 @@
 
 import 'package:cinema/core/api_client.dart';
 import 'package:cinema/core/app_config.dart';
+import 'package:cinema/core/push.dart';
 import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/core/session.dart';
 import 'package:cinema/data/auth_repository.dart';
+import 'package:cinema/data/devices_repository.dart';
 import 'package:cinema/models/client_config.dart';
 import 'package:cinema/state/auth.dart';
+import 'package:cinema/state/push.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
@@ -70,6 +73,25 @@ final Provider<AuthRepository> authRepositoryProvider =
 /// login/register/logout, a `ref.watch(authProvider)` sam stan.
 final NotifierProvider<AuthController, AuthState> authProvider =
     NotifierProvider<AuthController, AuthState>(AuthController.new);
+
+final Provider<DevicesRepository> devicesRepositoryProvider =
+    Provider<DevicesRepository>(
+      (Ref ref) => DevicesRepository(ref.watch(apiClientProvider)),
+    );
+
+/// Warstwa natywna powiadomień (decyzja 349).
+///
+/// Do bloku M2 stoi tu atrapa, która mówi „to urządzenie nie odbierze push" —
+/// cały stan i ekran powstają wcześniej i działają, a aplikacja zachowuje się
+/// dokładnie tak jak na telefonie bez Usług Google. W testach podmieniana na
+/// atrapę sterowaną z testu.
+final Provider<PushService> pushServiceProvider = Provider<PushService>(
+  (Ref ref) => const NoPushService(),
+);
+
+/// Powiadomienia push na tym telefonie: sprawdzenie, włączenie, wyłączenie.
+final NotifierProvider<PushController, PushState> pushProvider =
+    NotifierProvider<PushController, PushState>(PushController.new);
 
 /// Konfiguracja z serwera. `ref.invalidate(clientConfigProvider)` ponawia próbę.
 final FutureProvider<ClientConfig> clientConfigProvider =
