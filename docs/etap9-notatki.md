@@ -1216,6 +1216,33 @@ najgorszy możliwy rodzaj, i właśnie dlatego trafia do ekranu diagnostycznego 
 tego bloku wyłączał push, wdrożenie, które nie wypełniło dwóch zmiennych opisowych, przestałoby
 dostawać powiadomienia bez żadnego powodu.
 
+## Blok M2 — powiadomienie na ekranie i po kliknięciu
+
+**355. Deep link prowadzi tylko tam, gdzie NA PEWNO jest ekran.** Sprawdzenie kształtu adresu
+(decyzja 351) nie wystarcza: `/czego-tu-nie-ma` jest poprawną ścieżką wewnętrzną i przeszłoby
+walidację, a `GoRouter` odpowiedziałby na nie własnym ekranem błędu. Kliknięcie w powiadomienie
+skończyłoby się więc komunikatem o błędzie — najgorszym możliwym wynikiem, bo użytkownik zrobił
+dokładnie to, o co go poprosiliśmy. Dlatego `Routes.knows` rozpoznaje adresy, które aplikacja
+naprawdę obsługuje, a nieznany adres znaczy „po prostu otwórz aplikację". To ŚWIADOMA druga kopia
+wzorców tras i jako kopia ma strażnika: test liczy trasy zadeklarowane w `lib/router.dart` i nie
+przepuści dodania nowej bez uzupełnienia listy. Zapytanie samego routera nie wchodziło w grę —
+`GoRouter` odpowiada na „czy znasz ten adres" dopiero nawigacją, czyli robiąc to, czego chcemy
+uniknąć.
+
+**356. Sześć stanów sekcji powiadomień zamiast jednego przełącznika.** Przełącznik „powiadomienia
+wł./wył." wyglądałby tak samo na telefonie bez Usług Google, w kinie bez skonfigurowanej wysyłki
+i po odmowie systemu na stałe: naciśnięty wracałby na miejsce, bez słowa wyjaśnienia. A to trzy
+różne sytuacje i w dwóch z nich użytkownik nie może zrobić NIC — i to też jest odpowiedź, tylko
+trzeba ją napisać. Każdy stan mówi więc, co dalej: gdzie włączyć zgodę (ustawienia systemu, bo
+drugi raz okna nie będzie), że e-mail przychodzi niezależnie od push (żeby nikt nie został
+z wrażeniem, że o odwołanym seansie się nie dowie) i że wyłączenie dotyczy tylko tego telefonu.
+
+**357. Test deep linków montuje PRAWDZIWY korzeń aplikacji.** Kusiło, żeby sprawdzić sam widget
+`PushLinks`, ale wtedy najgroźniejsza awaria tej funkcji byłaby niewidoczna: gdyby ktoś wyjął go
+z `builder` w `app.dart`, powiadomienia przestałyby cokolwiek otwierać, a test widgetu nadal
+przechodziłby. Test montuje więc `CinemaApp` z podmienionym routerem — sprawdza nie tylko logikę,
+ale i to, że jest ona w ogóle podłączona.
+
 ### Pułapki
 
 **DZ. `prefer_initializing_formals` uderza także w atrapy testowe, a jej podpowiedzi czasem NIE DA
@@ -1229,3 +1256,19 @@ publiczne o innej nazwie (`systemPermission`) i zwykły parametr inicjalizujący
 — przy okazji test może je podejrzeć po prośbie o zgodę. Ogólniejsza nauczka, ta sama co w DY:
 przy `--fatal-infos` analizator nie rozróżnia „kodu produkcyjnego" i „pomocnika testowego",
 a plik w `test/fixtures/` przechodzi dokładnie te same reguły co `lib/`.
+
+**EA. Zmiana stanu providera w `initState` — ta sama pułapka po raz drugi.** Sekcja powiadomień
+wołała `check()` prosto z `initState`, a ta metoda już pierwszą instrukcją ustawia stan („sprawdzam").
+Riverpod zgłasza wtedy modyfikację providera w trakcie budowania drzewa — i padło **czternaście**
+testów naraz: wszystkie sześć sekcji powiadomień i wszystkie osiem ekranu konta, bo ekran konta
+tę sekcję zawiera. Objaw był myląco szeroki: testy zdjęcia i hasła, które z powiadomieniami nie
+mają nic wspólnego, przestały przechodzić.
+
+Najgorsze jest to, że tę samą pułapkę mam opisaną we WŁASNYM kodzie: `bookings_screen.dart`
+(blok I) i `countdown.dart` (blok F) mają w tym miejscu komentarz „po klatce, nie w trakcie
+budowania drzewa — Riverpod słusznie by na to nakrzyczał". Napisałem nową klasę od zera i nie
+sprawdziłem, jak robią to dwie istniejące klasy robiące dokładnie to samo: jedno żądanie przy
+wejściu na ekran. Nauczka jest węższa niż „czytaj swój kod": **zanim napiszę `initState`, patrzę,
+jak wygląda `initState` w sąsiednim ekranie tego projektu** — bo jeżeli w projekcie jest już
+rozwiązany ten problem, to jest rozwiązany w konkretny sposób i warto go powtórzyć, a nie wymyślać
+drugi raz. Rozwiązanie: `WidgetsBinding.instance.addPostFrameCallback` ze sprawdzeniem `mounted`.

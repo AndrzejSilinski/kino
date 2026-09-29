@@ -7,6 +7,7 @@
 
 import 'package:cinema/core/api_error.dart';
 import 'package:cinema/core/app_config.dart';
+import 'package:cinema/core/push.dart';
 import 'package:cinema/models/client_config.dart';
 import 'package:cinema/state/providers.dart';
 import 'package:flutter/material.dart';
@@ -91,6 +92,65 @@ class _Loaded extends StatelessWidget {
           label: 'Push włączony na serwerze',
           value: config.pushEnabled ? 'tak' : 'nie',
         ),
+        _FirebaseCheck(server: config.android),
+      ],
+    );
+  }
+}
+
+/// Porównanie projektu Firebase aplikacji z projektem serwera (decyzja 354).
+///
+/// To jedyne miejsce w całym systemie, gdzie tę pomyłkę w ogóle widać.
+/// Aplikacja zbudowana z `google-services.json` innego projektu niż ten,
+/// z którego wysyła serwer, zarejestruje urządzenie bez błędu i dostanie
+/// poprawnie wyglądający token — a powiadomienia nigdy nie dojdą, bo token
+/// z jednego projektu jest w drugim nieznany. Serwer też się nie dowie:
+/// zobaczy odpowiedź „nieznany token" i skasuje urządzenie, czyli zachowa się
+/// dokładnie tak jak przy odinstalowanej aplikacji.
+class _FirebaseCheck extends ConsumerWidget {
+  const _FirebaseCheck({required this.server});
+
+  final AndroidPushConfig? server;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Publiczne pole klasy nie podlega promocji typu — stąd kopia lokalna.
+    final AndroidPushConfig? expected = server;
+    final AsyncValue<PushProject?> app = ref.watch(pushProjectProvider);
+    // `when` zamiast skrótów na `AsyncValue`: tak samo jak wyżej w tym pliku,
+    // i tak samo widać tu wszystkie trzy stany, łącznie z błędem.
+    final PushProject? built = app.when(
+      data: (PushProject? value) => value,
+      error: (Object error, StackTrace stack) => null,
+      loading: () => null,
+    );
+    final String label = app.when(
+      data: (PushProject? value) =>
+          value?.projectId ?? 'brak — APK bez google-services.json',
+      error: (Object error, StackTrace stack) => 'nie udało się odczytać',
+      loading: () => 'sprawdzam…',
+    );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        _Row(
+          label: 'Projekt Firebase (serwer)',
+          value: expected?.projectId ?? 'nie podany w konfiguracji',
+        ),
+        _Row(label: 'Projekt Firebase (aplikacja)', value: label),
+        if (expected != null &&
+            built != null &&
+            expected.projectId != built.projectId)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(
+              'Aplikację zbudowano z INNEGO projektu Firebase niż ten, '
+              'z którego wysyła serwer. Rejestracja urządzenia przejdzie, '
+              'ale powiadomienia nie dojdą.',
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
       ],
     );
   }

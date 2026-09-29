@@ -42,6 +42,10 @@ class FakePushService implements PushService {
   /// Powiadomienie, którym „uruchomiono" aplikację — do odczytu raz.
   PushNotification? launch;
 
+  /// Projekt Firebase „wkompilowany w APK"; `null` odtwarza build bez
+  /// `google-services.json`.
+  PushProject? projectValue;
+
   final StreamController<String> _tokens = StreamController<String>.broadcast();
   final StreamController<PushNotification> _foreground =
       StreamController<PushNotification>.broadcast();
@@ -115,4 +119,7 @@ class FakePushService implements PushService {
   Future<void> display(PushNotification notification) async {
     displayed.add(notification);
   }
+
+  @override
+  Future<PushProject?> project() async => projectValue;
 }

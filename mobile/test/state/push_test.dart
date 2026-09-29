@@ -7,8 +7,6 @@
 // stary token zostawiony na serwerze, dwa wiersze dla jednego telefonu,
 // zapis w Keystore, który przeżył wylogowanie.
 
-import 'dart:convert';
-
 import 'package:cinema/core/push.dart';
 import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/core/session.dart';
@@ -20,73 +18,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../fixtures/fake_push_service.dart';
-import '../fixtures/fixtures.dart';
-
-const String deviceId = '01M2R0FF9TF8JNNQ9GBNZJ3TDQ';
-
-http.Response reply(Object? body, [int status = 200]) => http.Response(
-  jsonEncode(body),
-  status,
-  headers: <String, String>{'content-type': 'application/json'},
-);
-
-/// Atrapa serwera: konfiguracja, urządzenia, ustawienia powiadomień.
-class FakePushApi {
-  FakePushApi({
-    this.config = 'client_config_push_android',
-    this.deviceStatus = 204,
-  });
-
-  /// Fikstura konfiguracji klienta.
-  final String config;
-
-  /// Czym serwer odpowiada na wyrejestrowanie (404 = już go nie miał).
-  final int deviceStatus;
-
-  final List<Map<String, Object?>> registrations = <Map<String, Object?>>[];
-  final List<String> deletions = <String>[];
-  int consentCalls = 0;
-  int logouts = 0;
-
-  http.Response handle(http.Request request) {
-    final String path = request.url.path;
-    if (path.endsWith('/client-config')) {
-      return reply(envelope(config));
-    }
-    if (path.endsWith('/auth/logout')) {
-      logouts++;
-      return http.Response('', 204);
-    }
-    if (path.endsWith('/account/notifications')) {
-      consentCalls++;
-      return reply(<String, Object?>{
-        'data': <String, Object?>{
-          'push_enabled': true,
-          'push_consent_at': '2026-09-17T10:00:00+00:00',
-          'screening_reminders': true,
-        },
-      });
-    }
-    if (request.method == 'DELETE') {
-      deletions.add(path.split('/').last);
-      return deviceStatus == 204
-          ? http.Response('', 204)
-          : reply(<String, Object?>{
-              'message': 'Nie znaleziono zasobu.',
-              'code': 'RESOURCE_NOT_FOUND',
-            }, deviceStatus);
-    }
-    registrations.add(jsonDecode(request.body) as Map<String, Object?>);
-    return reply(<String, Object?>{
-      'data': <String, Object?>{
-        'id': deviceId,
-        'platform': 'android',
-        'last_seen_at': '2026-09-17T10:00:00+00:00',
-        'created_at': '2026-09-17T10:00:00+00:00',
-      },
-    }, registrations.length == 1 ? 201 : 200);
-  }
-}
+import '../fixtures/push_api.dart';
 
 ProviderContainer containerFor(
   FakePushApi api,
@@ -108,21 +40,6 @@ ProviderContainer containerFor(
   addTearDown(container.dispose);
   addTearDown(service.dispose);
   return container;
-}
-
-/// Zapis urządzenia w magazynie — tak jak zapisuje go stan.
-Future<void> remember(
-  SecureStore store, {
-  String id = deviceId,
-  required String token,
-}) => store.write(
-  StoreKeys.pushDevice,
-  jsonEncode(<String, String>{'id': id, 'token': token}),
-);
-
-Future<Map<String, Object?>?> stored(SecureStore store) async {
-  final String? raw = await store.read(StoreKeys.pushDevice);
-  return raw == null ? null : jsonDecode(raw) as Map<String, Object?>;
 }
 
 void main() {

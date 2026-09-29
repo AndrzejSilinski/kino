@@ -115,6 +115,22 @@ class PushNotification {
   String toString() => 'PushNotification($type, path: $path)';
 }
 
+/// Projekt Firebase, z którego zbudowano TĘ aplikację.
+///
+/// Bierze się z `google-services.json` wkompilowanego w APK (decyzja 292),
+/// więc mówi, co wie telefon — w odróżnieniu od bloku `push.android`
+/// w konfiguracji, który mówi, z czego wysyła serwer. Diagnostyka porównuje
+/// jedno z drugim (decyzja 354).
+class PushProject {
+  const PushProject({required this.projectId, required this.appId});
+
+  final String projectId;
+  final String appId;
+
+  @override
+  String toString() => 'PushProject($projectId)';
+}
+
 /// Wszystko, czego stan powiadomień potrzebuje od warstwy natywnej.
 abstract interface class PushService {
   /// Czy to urządzenie w ogóle odbierze push (usługi Google, zainicjowany
@@ -153,12 +169,16 @@ abstract interface class PushService {
 
   /// Pokazanie powiadomienia własnymi siłami (pierwszy plan).
   Future<void> display(PushNotification notification);
+
+  /// Projekt Firebase wkompilowany w tę aplikację albo `null`, gdy APK
+  /// zbudowano bez `google-services.json`.
+  Future<PushProject?> project();
 }
 
 /// Serwis, który nic nie robi i mówi o tym wprost.
 ///
 /// Stoi pod `pushServiceProvider`, dopóki nie wejdzie warstwa Firebase
-/// (blok M2). Dzięki temu cały stan powiadomień, ekran i testy powstają
+/// (blok M3). Dzięki temu cały stan powiadomień, ekran i testy powstają
 /// i działają wcześniej, a aplikacja zachowuje się jak na telefonie bez Usług
 /// Google: „powiadomienia niedostępne na tym urządzeniu" zamiast awarii.
 class NoPushService implements PushService {
@@ -196,4 +216,7 @@ class NoPushService implements PushService {
 
   @override
   Future<void> display(PushNotification notification) async {}
+
+  @override
+  Future<PushProject?> project() async => null;
 }

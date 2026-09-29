@@ -17,6 +17,7 @@ import 'dart:async';
 
 import 'package:cinema/core/api_error.dart';
 import 'package:cinema/core/photo_picker.dart';
+import 'package:cinema/features/account/push_settings.dart';
 import 'package:cinema/models/user.dart';
 import 'package:cinema/state/account.dart';
 import 'package:cinema/state/providers.dart';
@@ -41,6 +42,8 @@ class AccountScreen extends ConsumerWidget {
                 _Avatar(user: user),
                 const SizedBox(height: 24),
                 _NameForm(user: user),
+                const Divider(height: 40),
+                const PushSettings(),
                 const Divider(height: 40),
                 const _PasswordForm(),
               ],

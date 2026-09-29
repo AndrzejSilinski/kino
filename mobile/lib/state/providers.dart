@@ -81,13 +81,21 @@ final Provider<DevicesRepository> devicesRepositoryProvider =
 
 /// Warstwa natywna powiadomień (decyzja 349).
 ///
-/// Do bloku M2 stoi tu atrapa, która mówi „to urządzenie nie odbierze push" —
+/// Do bloku M3 stoi tu atrapa, która mówi „to urządzenie nie odbierze push" —
 /// cały stan i ekran powstają wcześniej i działają, a aplikacja zachowuje się
 /// dokładnie tak jak na telefonie bez Usług Google. W testach podmieniana na
 /// atrapę sterowaną z testu.
 final Provider<PushService> pushServiceProvider = Provider<PushService>(
   (Ref ref) => const NoPushService(),
 );
+
+/// Projekt Firebase wkompilowany w TĘ aplikację — do porównania z tym, z czego
+/// wysyła serwer (decyzja 354). `null` znaczy: APK zbudowano bez
+/// `google-services.json`, więc nie ma czego porównywać.
+final FutureProvider<PushProject?> pushProjectProvider =
+    FutureProvider<PushProject?>(
+      (Ref ref) => ref.watch(pushServiceProvider).project(),
+    );
 
 /// Powiadomienia push na tym telefonie: sprawdzenie, włączenie, wyłączenie.
 final NotifierProvider<PushController, PushState> pushProvider =

@@ -20,6 +20,7 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
 import '../fixtures/fake_photo_picker.dart';
+import '../fixtures/fixtures.dart';
 
 const Timeout limit = Timeout(Duration(seconds: 30));
 const String token = '3|tokenTestowyEkranuKonta';
@@ -57,6 +58,13 @@ class FakeAccountApi {
     if (path.endsWith('/auth/me')) {
       return reply(userEnvelope());
     }
+    // Sekcja powiadomień (blok M2) pyta o konfigurację od razu po wejściu na
+    // ekran. Bez tej gałęzi żądanie wpadałoby do obsługi avatara i psuło jej
+    // liczniki — a to najgorszy rodzaj fałszywego wyniku: test padałby na
+    // czymś, czego w ogóle nie dotyczy.
+    if (path.endsWith('/client-config')) {
+      return reply(envelope('client_config_push_off'));
+    }
     if (path.endsWith('/account/profile')) {
       profileCalls++;
       return onProfile?.call() ??
@@ -85,7 +93,10 @@ class FakeAccountApi {
 }
 
 void tallView(WidgetTester tester) {
-  tester.view.physicalSize = const Size(800, 1800);
+  // 2600, nie 1800: od bloku M2 ekran ma jeszcze sekcję powiadomień, a pola
+  // hasła zjechały poza widok — `ListView` montuje tylko to, co widać, więc
+  // testy hasła zaczęłyby nie znajdować pól (pułapka DX).
+  tester.view.physicalSize = const Size(800, 2600);
   tester.view.devicePixelRatio = 1;
   addTearDown(tester.view.reset);
 }

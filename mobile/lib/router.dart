@@ -52,6 +52,43 @@ class Routes {
   /// Kluczem jest ULID, nie sekwencyjne id: po numerach dałoby się skanować
   /// cudze zakupy, a ten sam adres działa w SPA i w linku z powiadomienia.
   static String booking(String reference) => '$bookings/$reference';
+
+  /// Czy aplikacja ma ekran pod tym adresem (decyzja 355).
+  ///
+  /// To ŚWIADOMA druga kopia wzorców z tras poniżej — i tak, kopia kosztuje.
+  /// Alternatywą byłoby zapytanie routera, czy adres da się dopasować, ale
+  /// `GoRouter` odpowiada na to dopiero nawigacją: przy nietrafionym adresie
+  /// pokazuje własny ekran błędu, czyli robi dokładnie to, czego chcemy uniknąć
+  /// po kliknięciu w powiadomienie. Kopii pilnuje test: liczy trasy
+  /// zadeklarowane niżej i nie przepuści dodania nowej bez uzupełnienia tej
+  /// metody.
+  ///
+  /// Serwer wysyła dziś w powiadomieniach wyłącznie `/bookings/{reference}`
+  /// (`BookingPushContent::url`), ale obsługujemy wszystkie adresy aplikacji,
+  /// bo ten sam kod obsłuży też zwykły link otwarty na telefonie.
+  static bool knows(String path) {
+    const List<String> stale = <String>[
+      home,
+      login,
+      register,
+      cinemas,
+      account,
+      bookings,
+      diagnostics,
+    ];
+    return stale.contains(path) ||
+        _cinemaPath.hasMatch(path) ||
+        _screeningPath.hasMatch(path) ||
+        _bookingPath.hasMatch(path);
+  }
+
+  static final RegExp _cinemaPath = RegExp(r'^/cinemas/[a-z0-9-]+$');
+  static final RegExp _screeningPath = RegExp(
+    r'^/screenings/\d+(/seats|/checkout)?$',
+  );
+  static final RegExp _bookingPath = RegExp(
+    r'^/bookings/[0-9A-HJKMNP-TV-Z]{26}$',
+  );
 }
 
 final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
