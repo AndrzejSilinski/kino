@@ -65,6 +65,12 @@ class HomeScreen extends ConsumerWidget {
                 icon: const Icon(Icons.confirmation_number_outlined),
                 label: const Text('Moje bilety'),
               ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () => context.go(Routes.account),
+                icon: const Icon(Icons.person_outline),
+                label: const Text('Moje konto'),
+              ),
             ],
           ],
         ),

@@ -7,6 +7,7 @@ import 'package:cinema/features/auth/login_screen.dart';
 import 'package:cinema/features/auth/register_screen.dart';
 import 'package:cinema/features/catalog/cinema_list_screen.dart';
 import 'package:cinema/features/catalog/cinema_screen.dart';
+import 'package:cinema/features/account/account_screen.dart';
 import 'package:cinema/features/booking/checkout_screen.dart';
 import 'package:cinema/features/bookings/booking_screen.dart';
 import 'package:cinema/features/bookings/bookings_screen.dart';
@@ -40,6 +41,9 @@ class Routes {
 
   /// `/screenings/338/checkout` — podsumowanie i płatność.
   static String checkout(int id) => '${screening(id)}/checkout';
+
+  /// `/account` — dane konta, zdjęcie i hasło.
+  static const String account = '/account';
 
   /// `/bookings` — historia zakupów.
   static const String bookings = '/bookings';
@@ -99,6 +103,11 @@ final Provider<GoRouter> routerProvider = Provider<GoRouter>((Ref ref) {
         path: '/screenings/:id(\\d+)/checkout',
         builder: (BuildContext context, GoRouterState state) =>
             CheckoutScreen(screeningId: int.parse(state.pathParameters['id']!)),
+      ),
+      GoRoute(
+        path: Routes.account,
+        builder: (BuildContext context, GoRouterState state) =>
+            const AccountScreen(),
       ),
       GoRoute(
         path: Routes.bookings,

@@ -7,6 +7,7 @@
 
 import 'dart:convert';
 
+import 'package:cinema/core/photo_picker.dart';
 import 'package:cinema/core/secure_store.dart';
 import 'package:cinema/core/session.dart';
 import 'package:cinema/state/account.dart';
@@ -16,6 +17,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+
+import '../fixtures/fake_photo_picker.dart';
 
 const String token = '5|tokenTestowyKonta';
 
@@ -82,7 +85,10 @@ class FakeAccountApi {
   }
 }
 
-Future<ProviderContainer> loggedIn(FakeAccountApi api) async {
+Future<ProviderContainer> loggedIn(
+  FakeAccountApi api, {
+  FakePhotoPicker? picker,
+}) async {
   final AppSession session = AppSession(InMemorySecureStore());
   await session.setToken(token);
   final ProviderContainer container = ProviderContainer(
@@ -93,6 +99,7 @@ Future<ProviderContainer> loggedIn(FakeAccountApi api) async {
       ),
       secureStoreProvider.overrideWithValue(InMemorySecureStore()),
       sessionProvider.overrideWithValue(session),
+      photoPickerProvider.overrideWithValue(picker ?? FakePhotoPicker()),
     ],
   );
   addTearDown(container.dispose);
@@ -227,6 +234,84 @@ void main() {
     expect(await druga, isFalse);
     expect(api.profileCalls, 1);
     expect(container.read(authProvider).user!.name, 'Pierwsza');
+  });
+
+  test('zdjęcie z aparatu idzie prosto na serwer', () async {
+    final FakePhotoPicker picker = FakePhotoPicker();
+    final FakeAccountApi api = FakeAccountApi();
+    final ProviderContainer container = await loggedIn(api, picker: picker);
+
+    final bool ok = await controller(container).pickAvatar(PhotoOrigin.camera);
+
+    expect(ok, isTrue);
+    expect(picker.calls, 1);
+    expect(picker.origin, PhotoOrigin.camera);
+    expect(api.avatarPosts, 1);
+    expect(
+      container.read(authProvider).user!.avatarUrl,
+      endsWith('/avatars/abc.jpg'),
+    );
+  });
+
+  test('zamknięty aparat NIE jest błędem i nie rusza serwera', () async {
+    final FakeAccountApi api = FakeAccountApi();
+    final ProviderContainer container = await loggedIn(
+      api,
+      picker: FakePhotoPicker(result: PhotoResult.cancelled),
+    );
+
+    final bool ok = await controller(container).pickAvatar(PhotoOrigin.gallery);
+
+    expect(ok, isFalse);
+    expect(api.avatarPosts, 0);
+    // Żadnego komunikatu: użytkownik sam zamknął wybierak.
+    expect(state(container).problem, isNull);
+    expect(state(container).notice, isNull);
+    expect(state(container).busy, isFalse);
+  });
+
+  test('odmowa systemu mówi, GDZIE włączyć zgodę', () async {
+    // „Coś się nie udało" zostawiłoby użytkownika bez wyjścia — a wyjście
+    // jest, tylko w ustawieniach telefonu, nie w aplikacji.
+    final ProviderContainer container = await loggedIn(
+      FakeAccountApi(),
+      picker: FakePhotoPicker(result: PhotoResult.denied),
+    );
+
+    await controller(container).pickAvatar(PhotoOrigin.camera);
+
+    expect(state(container).problem, contains('ustawieniach telefonu'));
+    expect(state(container).error, isNull);
+  });
+
+  test('niezgodne powtórzenie hasła NIE idzie do serwera', () async {
+    // Zmiana hasła ma osobny, ciasny limit, a literówkę widać bez pytania.
+    final FakeAccountApi api = FakeAccountApi();
+    final ProviderContainer container = await loggedIn(api);
+
+    final bool ok = await controller(container).changePasswordChecked(
+      current: 'stareHaslo1',
+      next: 'noweHaslo2',
+      repeated: 'noweHaslo3',
+    );
+
+    expect(ok, isFalse);
+    expect(api.passwordCalls, 0);
+    expect(state(container).problem, contains('różni się'));
+  });
+
+  test('zgodne powtórzenie przechodzi dalej', () async {
+    final FakeAccountApi api = FakeAccountApi(revoked: 1);
+    final ProviderContainer container = await loggedIn(api);
+
+    final bool ok = await controller(container).changePasswordChecked(
+      current: 'stareHaslo1',
+      next: 'noweHaslo2',
+      repeated: 'noweHaslo2',
+    );
+
+    expect(ok, isTrue);
+    expect(api.passwordCalls, 1);
   });
 
   test('komunikat da się schować', () async {

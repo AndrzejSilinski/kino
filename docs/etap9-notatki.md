@@ -988,3 +988,76 @@ z lepszym aparatem — czyli u tych, którzy mają najlepsze zdjęcia. Skoro ser
 256 pikseli, aplikacja wyśle około 512 — z zapasem nad minimum i z plikiem rzędu dziesiątek
 kilobajtów. Samo zmniejszanie (i aparat) to blok J2; tutaj zapisuję warunek, bo wynika z kontraktu,
 a nie z wygody.
+
+## Blok J2 — ekran konta i zdjęcie z aparatu
+
+### Decyzje
+
+**335. Aparat i galeria za jedną ścianą, jak Stripe i udostępnianie pliku.** `image_picker`
+i `flutter_image_compress` rozmawiają z kodem natywnym, więc w `flutter test` ich nie ma. Za
+interfejsem `PhotoPicker` test przechodzi całą drogę „zrób zdjęcie → zmniejsz → wyślij", a co
+ważniejsze — przechodzi też ODMOWĘ systemu, czyli ścieżkę, której na emulatorze nie zobaczyłbym
+w ogóle. To trzeci raz, kiedy ta sama zasada się opłaca (315 Stripe, 327 plik, teraz aparat),
+i wniosek jest ogólny: każde wyjście do platformy dostaje interfejs, bo inaczej najważniejsze
+ścieżki błędu zostają nieprzetestowane.
+
+**336. NIE deklarujemy uprawnienia CAMERA w manifeście.** To wygląda na przeoczenie, a jest
+wyborem. `image_picker` robi zdjęcie przez systemową aplikację aparatu (`ACTION_IMAGE_CAPTURE`),
+która ma własne uprawnienia — nasza aplikacja nie dotyka kamery. Gdybyśmy zadeklarowali CAMERA,
+Android zacząłby wymagać zgody w czasie działania na coś, czego nie robimy, a każde zbędne
+uprawnienie to jedno pytanie więcej, na które użytkownik może odpowiedzieć „nie", i jedna pozycja
+na liście uprawnień w sklepie. Galerię na Androidzie 13+ obsługuje systemowy wybierak, też bez
+uprawnienia. Gałąź „odmowa" zostaje w modelu jako obrona, bo systemowy komponent może odmówić
+z powodów, których nie kontrolujemy — i wtedy komunikat mówi, GDZIE włączyć zgodę, zamiast
+„coś się nie udało". Sami o uprawnienie nie pytamy, więc nie mamy jak go odzyskać z aplikacji;
+jedynym wyjściem są ustawienia telefonu i o tym trzeba powiedzieć wprost.
+
+**337. Zdjęcie zmniejszamy, żeby dało się je WGRAĆ — nie dla oszczędności.** Serwer przyjmuje
+najwyżej 5 MB i 16 Mpx, a zdjęcie z dzisiejszego telefonu ma 12 Mpx i regularnie przekracza 5 MB.
+Bez zmniejszenia avatar nie dałby się wgrać właśnie tym osobom, które mają najlepsze aparaty.
+Zmniejszamy do 512 pikseli krótszego boku: serwer i tak skadruje do 256×256, a 512 daje zapas nad
+jego minimum 128 i plik rzędu kilkudziesięciu kilobajtów. Dwie rzeczy przy okazji, obie warte
+wypowiedzenia: wynik jest ZAWSZE w JPEG-u, więc nazwa `avatar.jpg`, po której serwer poznaje
+rozszerzenie, zawsze zgadza się z zawartością (decyzja 333); i wynik jest BEZ EXIF-u, więc
+współrzędne GPS miejsca, w którym zrobiono zdjęcie, nie opuszczają telefonu — a w zdjęciu
+z aparatu siedzą domyślnie. Sprawdzone w źródle: `minWidth`/`minHeight` w tej paczce działają jak
+GÓRNE ograniczenie z zachowaniem proporcji i nigdy nie powiększają, choć nazwa sugeruje odwrotnie.
+
+**338. Niezgodne powtórzenie hasła wyłapujemy U SIEBIE.** Zmiana hasła ma osobny, ciaśniejszy limit
+niż reszta operacji na koncie, a literówka w powtórzeniu jest rzeczą, którą aplikacja widzi bez
+pytania serwera — wysłanie jej zużyłoby limit na odpowiedź, którą znamy z góry. Wszystko inne
+(długość, litera, cyfra, „inne niż obecne", poprawność obecnego hasła) sprawdza serwer i jego
+komunikaty pokazujemy POD odpowiednimi polami, bo przy czterech polach na jednym ekranie komunikat
+ogólny zmusza do zgadywania. Po udanej zmianie pola czyścimy: zostawione hasło widzi każdy, kto
+weźmie telefon do ręki.
+
+**339. Avatar pokazujemy zwykłym adresem, BEZ tokenu — i to nie jest niekonsekwencja wobec kodu
+QR.** Kod QR biletu wymaga nagłówka z tokenem (decyzja 324), a zdjęcie profilowe nie, choć oba są
+obrazami z tego samego serwera. Różnica jest w tym, czym te obrazy SĄ: kod QR to przepustka na
+salę, a avatar to obrazek. Avatar leży w publicznym magazynie pod nazwą z dwudziestu losowych
+bajtów, więc adresu nie da się zgadnąć ani wyliczyć, a gdyby ktoś go zdobył, nie zyskuje nic poza
+zdjęciem. Za to bilet, gdyby jego adres wyciekł do logów, wpuszczałby na film. Pytanie „czy ten
+obraz jest przepustką" jest tu jedynym, które trzeba zadać — i odpowiedź na nie rozstrzyga
+o sposobie pobierania.
+
+### Pułapki
+
+**DY. `authProvider` NIE mieszka w `state/auth.dart`.** Dwa bloki z rzędu (J1 i J2) zatrzymały się
+na analizie z tym samym ostrzeżeniem: `Unused import: 'package:cinema/state/auth.dart'`. Za każdym
+razem dopisywałem ten import odruchowo, bo plik korzysta z `authProvider` — a ten jest deklarowany
+w `state/providers.dart`, razem z resztą providerów. `AuthController` dostaje się przez
+`.notifier` BEZ nazywania typu, więc import `state/auth.dart` jest potrzebny wyłącznie tam, gdzie
+pada nazwa `AuthStatus` albo `AuthController` (na przykład w teście stanu, który porównuje status).
+Kosztowało to dwa razy dziewięć sekund, bo analizator stoi przed testami i przed budowaniem APK —
+ale dwa razy to już nawyk, nie przypadek, i dlatego trafia do notatek zamiast do poprawki po cichu.
+
+Trzeci przebieg tego samego bloku stanął na bliskim kuzynie: `The import of 'dart:typed_data' is
+unnecessary because all of the used elements are also provided by the import of
+'package:flutter/services.dart'`. To już nie ostrzeżenie, a `info` — ale wykonawca uruchamia
+`flutter analyze --fatal-infos`, więc blokuje tak samo. Wniosek wspólny dla obu: **przy tym
+ustawieniu analizatora import jest kodem, nie ozdobą.** Zanim dopiszę import „bo stamtąd chyba
+pochodzi ta nazwa", sprawdzam, czy nazwy z niego naprawdę padają w pliku i czy nie przychodzą już
+przez inny import — `flutter/services.dart` re-eksportuje typy z `dart:typed_data`,
+a `state/providers.dart` wszystkie providery aplikacji. Trzy zatrzymania w trzech kolejnych
+przebiegach na tej jednej rzeczy to najtańsza lekcja w całym etapie, bo każda kosztowała
+dziewięć sekund, a nie dziesięć minut testów.
