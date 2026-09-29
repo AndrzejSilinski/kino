@@ -25,6 +25,19 @@ final class BookingPushContent
         return new PushMessage('Przypomnienie o seansie', self::when($booking), 'screening.reminder', self::url($booking));
     }
 
+    /**
+     * Kino odwołało seans (Etap 9, blok K).
+     *
+     * Tytuł mówi o SEANSIE, nie o rezerwacji: na zablokowanym ekranie „Rezerwacja anulowana"
+     * brzmi jak coś, co klient zrobił sam, a tu decyzja należała do kina. Szczegóły —
+     * pieniądze, numer rezerwacji — zostają w mailu; tu jest tylko tyle, żeby nie przyjść
+     * pod kino.
+     */
+    public static function cancelledByCinema(Booking $booking): PushMessage
+    {
+        return new PushMessage('Kino odwołało seans', self::when($booking), 'booking.cancelled', self::url($booking));
+    }
+
     private static function when(Booking $booking): string
     {
         $screening = $booking->screening;

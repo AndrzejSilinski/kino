@@ -1061,3 +1061,40 @@ przez inny import — `flutter/services.dart` re-eksportuje typy z `dart:typed_d
 a `state/providers.dart` wszystkie providery aplikacji. Trzy zatrzymania w trzech kolejnych
 przebiegach na tej jednej rzeczy to najtańsza lekcja w całym etapie, bo każda kosztowała
 dziewięć sekund, a nie dziesięć minut testów.
+
+## Blok K — backend: push dla Androida i odwołany seans
+
+### Decyzje
+
+**340. `push.enabled` mówi o SERWERZE, a konfiguracja aplikacji jest osobno dla każdej platformy.**
+Do tej pory `client-config` zwracał `enabled: true` tylko wtedy, gdy komplet miały wartości
+WEBOWE (klucz API, identyfikator aplikacji web, sender id, klucz VAPID). Dla Etapu 8 to działało,
+bo jedynym klientem push była przeglądarka. Z aplikacją mobilną ta sama reguła daje absurd:
+kino, które ma w Firebase wyłącznie aplikację Android, widziałoby push jako wyłączony NA TELEFONIE,
+choć wszystko jest skonfigurowane. Dlatego `enabled` znaczy teraz „serwer ma czym wysłać":
+kanał włączony, identyfikator projektu i plik konta serwisowego na miejscu. Konfiguracja klientów
+idzie obok, po jednym bloku na platformę (`firebase` dla web jak dotąd, nowy `android`), a brak
+jednego nie unieważnia drugiego. Zmiana jest bezpieczna dla SPA, bo ono i tak sprawdzało
+`push.enabled && push.firebase` przed inicjalizacją — sprawdziłem to w jego kodzie przed zmianą
+kontraktu, a nie po.
+
+**341. Blok `android` podajemy po to, żeby telefon mógł WYKRYĆ NIEZGODNOŚĆ projektu.** Aplikacja
+mobilna nie potrzebuje tych wartości do działania — ma własne w `google-services.json`
+wkompilowanym w APK. Potrzebuje ich do czegoś innego: gdy APK jest zbudowany z konfiguracją
+jednego projektu Firebase, a serwer wysyła przez konto serwisowe innego, wszystko wygląda
+poprawnie — token rejestruje się bez błędu, serwer wysyła bez błędu — a powiadomienie nie dochodzi
+do nikogo i nie ma śladu, dlaczego. To najgorszy rodzaj awarii: cicha. Mając `project_id` i `app_id`
+z serwera, aplikacja porówna je z własnymi i powie o rozjeździe w diagnostyce, zamiast pozwolić
+komuś szukać błędu w kodzie powiadomień.
+
+**342. Odwołany seans idzie pushem OBOK maila, nie zamiast niego.** To jedyne powiadomienie w tej
+aplikacji, które klient musi zobaczyć, ZANIM wyjdzie z domu — mail przeczytany wieczorem po
+seansie jest bez wartości. Dwa kanały mają różne opóźnienia i różne szanse dotarcia, więc idą oba,
+a push tylko przy zgodzie (`wantsPush()`), tak samo jak przypomnienie o seansie. Treść na
+zablokowanym ekranie to wyłącznie tytuł filmu i termin — bez numeru rezerwacji, miejsc i kwoty,
+jak w pozostałych powiadomieniach.
+
+**343. Tytuł mówi o SEANSIE, nie o rezerwacji.** „Rezerwacja anulowana" na zablokowanym ekranie
+brzmi jak coś, co klient zrobił sam — i pierwsza myśl jest wtedy „to nie ja". Tu decyzja należała
+do kina, więc tytuł brzmi „Kino odwołało seans". Szczegóły (pieniądze, numer rezerwacji, co dalej)
+zostają w mailu; push ma wystarczyć do tego, żeby nie przyjechać pod kino.

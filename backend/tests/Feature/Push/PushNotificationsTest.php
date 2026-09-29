@@ -13,6 +13,7 @@ use App\Models\Movie;
 use App\Models\PushDevice;
 use App\Models\Screening;
 use App\Models\User;
+use App\Notifications\BookingCancelledByCinema;
 use App\Notifications\Channels\PushChannel;
 use App\Notifications\PaymentConfirmedPush;
 use App\Notifications\ScreeningReminder;
@@ -118,6 +119,35 @@ final class PushNotificationsTest extends TestCase
         $booking = $this->paidBooking($withConsent);
         $message = (new ScreeningReminder($booking->id))->toPush($withConsent);
         $this->assertSame(['Przypomnienie o seansie', 'screening.reminder'], [$message->title, $message->type]);
+    }
+
+    public function test_odwolany_seans_idzie_mailem_i_pushem_bez_danych_osobowych(): void
+    {
+        // Odwołany seans to jedyne powiadomienie, które klient MUSI zobaczyć, zanim wyjdzie
+        // z domu — dlatego push obok maila, a nie zamiast niego.
+        $withConsent = $this->user();
+        $withoutConsent = $this->user(consent: false);
+
+        $this->assertSame(['mail', PushChannel::class], (new BookingCancelledByCinema(1))->via($withConsent));
+        $this->assertSame(['mail'], (new BookingCancelledByCinema(1))->via($withoutConsent));
+
+        $booking = $this->paidBooking($withConsent);
+        $message = (new BookingCancelledByCinema($booking->id))->toPush($withConsent);
+
+        $this->assertSame(['Kino odwołało seans', 'booking.cancelled'], [$message->title, $message->type]);
+        $this->assertSame('/bookings/'.$booking->reference, $message->url);
+        $this->assertStringContainsString('Barbie', $message->body);
+        foreach (['Anna', 'Tajemnicza', 'anna.tajemnicza', $booking->reference] as $personal) {
+            $this->assertStringNotContainsString($personal, $message->title.' '.$message->body);
+        }
+    }
+
+    public function test_odwolany_seans_bez_wlaczonego_kanalu_idzie_samym_mailem(): void
+    {
+        $user = $this->user();
+        config(['push.enabled' => false]);
+
+        $this->assertSame(['mail'], (new BookingCancelledByCinema(1))->via($user));
     }
 
     public function test_kanal_usuwa_urzadzenia_z_niewaznym_tokenem(): void

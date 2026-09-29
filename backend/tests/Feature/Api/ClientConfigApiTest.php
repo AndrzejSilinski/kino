@@ -58,8 +58,44 @@ final class ClientConfigApiTest extends TestCase
             ]]);
         $this->assertStringNotContainsString('firebase-service-account', (string) $response->getContent(), 'Ścieżka pliku z sekretem nie wychodzi do klienta.');
 
+        // Niekompletna konfiguracja WEBOWA zabiera tylko blok `firebase`. Kanał zostaje
+        // włączony, bo serwer nadal ma czym wysyłać — a wdrożenie z samą aplikacją Android
+        // jest równie poprawne jak z samą webową (Etap 9, decyzja 340).
         config(['push.web.vapid_public_key' => '']);
+        $this->getJson('/api/v1/client-config')->assertJsonPath('data.push', ['enabled' => true]);
+
+        // Dopiero brak tego, czym wysyła SERWER, wyłącza kanał.
+        config(['push.fcm.credentials' => '']);
         $this->getJson('/api/v1/client-config')->assertJsonPath('data.push', ['enabled' => false]);
+    }
+
+    public function test_android_block_is_published_next_to_the_web_one(): void
+    {
+        // Aplikacja mobilna ma swoją konfigurację w google-services.json wkompilowanym w APK.
+        // Te wartości służą jej wyłącznie do sprawdzenia, czy telefon i serwer mówią o TYM SAMYM
+        // projekcie Firebase — niezgodność kończy się ciszą, bez żadnego błędu po drodze.
+        config([
+            'push.enabled' => true,
+            'push.fcm.project_id' => 'kino-test',
+            'push.fcm.credentials' => '/run/secrets/cinema/firebase-service-account.json',
+            'push.android.app_id' => '1:1234567890:android:abcdef',
+            'push.android.package_name' => 'pl.silinski.cinema',
+        ]);
+
+        $this->getJson('/api/v1/client-config')->assertOk()
+            ->assertJsonPath('data.push.enabled', true)
+            ->assertJsonPath('data.push.android', [
+                'project_id' => 'kino-test',
+                'app_id' => '1:1234567890:android:abcdef',
+                'package_name' => 'pl.silinski.cinema',
+            ])
+            // Bez konfiguracji webowej bloku `firebase` nie ma, a kanał działa.
+            ->assertJsonMissingPath('data.push.firebase');
+
+        config(['push.android.app_id' => '']);
+        $this->getJson('/api/v1/client-config')->assertOk()
+            ->assertJsonPath('data.push.enabled', true)
+            ->assertJsonMissingPath('data.push.android');
     }
 
     public function test_never_exposes_secrets(): void

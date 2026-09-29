@@ -40,6 +40,16 @@ return [
         'vapid_public_key' => env('FIREBASE_VAPID_PUBLIC_KEY'),
     ],
 
+    // Konfiguracja aplikacji ANDROID Firebase (Etap 9, blok K). Aplikacja mobilna bierze swoją
+    // konfigurację z google-services.json wkompilowanego w APK i NIE potrzebuje jej z serwera —
+    // te wartości służą do SPRAWDZENIA, czy telefon i serwer mówią o tym samym projekcie.
+    // Bez tego niezgodność kończy się ciszą: token zarejestrowany przez aplikację jest poprawny,
+    // serwer wysyła bez błędu, a powiadomienie nie dochodzi do nikogo.
+    'android' => [
+        'app_id' => env('FIREBASE_ANDROID_APP_ID'),
+        'package_name' => env('FIREBASE_ANDROID_PACKAGE_NAME', 'pl.silinski.cinema'),
+    ],
+
     // Ile urządzeń (tokenów) może mieć jedno konto — najstarsze ponad limit są usuwane.
     'max_devices_per_user' => (int) env('PUSH_MAX_DEVICES_PER_USER', 20),
 

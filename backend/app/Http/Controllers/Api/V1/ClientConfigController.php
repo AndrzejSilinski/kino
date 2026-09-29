@@ -41,29 +41,58 @@ final class ClientConfigController extends Controller
                     'max_seats_per_session' => (int) config('cinema.seat_lock.max_seats_per_session'),
                     'payment_window_seconds' => (int) config('payments.window_seconds'),
                 ],
-                // Web Push przez FCM (blok L): konfiguracja aplikacji web Firebase i publiczny klucz VAPID.
+                // Push przez FCM: konfiguracja aplikacji WEB (blok L Etapu 8) i ANDROID (Etap 9).
                 // Plik konta serwisowego (sekret) NIGDY tu nie trafia — tylko wartości, które i tak
-                // widzi każda przeglądarka korzystająca z Firebase.
+                // widzi każdy klient korzystający z Firebase.
                 'push' => $this->push(),
             ],
         ])->setPublic()->setMaxAge(60);
     }
 
-    /** @return array{enabled: bool, firebase?: array<string, string>} */
+    /**
+     * Stan kanału push i konfiguracja aplikacji klienckich.
+     *
+     * `enabled` mówi o SERWERZE: czy kanał jest włączony i czy jest czym wysyłać (identyfikator
+     * projektu i plik konta serwisowego). Konfiguracja aplikacji klienckich jest osobno, po jednym
+     * bloku na platformę, bo brak jednej nie unieważnia drugiej — wdrożenie z samą aplikacją
+     * Android jest równie poprawne jak z samą webową (Etap 9, decyzja 340). Wcześniej `enabled`
+     * zależało od kompletu wartości WEBOWYCH, więc kino bez aplikacji web widziałoby push jako
+     * wyłączony także na telefonie.
+     *
+     * @return array{enabled: bool, firebase?: array<string, string>, android?: array<string, string>}
+     */
     private function push(): array
     {
-        $firebase = [
+        $projectId = (string) config('push.fcm.project_id');
+
+        if (! config('push.enabled') || $projectId === '' || (string) config('push.fcm.credentials') === '') {
+            return ['enabled' => false];
+        }
+
+        $push = ['enabled' => true];
+
+        $web = [
             'api_key' => (string) config('push.web.api_key'),
             'app_id' => (string) config('push.web.app_id'),
-            'project_id' => (string) config('push.fcm.project_id'),
+            'project_id' => $projectId,
             'messaging_sender_id' => (string) config('push.web.messaging_sender_id'),
             'vapid_public_key' => (string) config('push.web.vapid_public_key'),
         ];
 
-        if (! config('push.enabled') || in_array('', $firebase, true)) {
-            return ['enabled' => false];
+        if (! in_array('', $web, true)) {
+            $push['firebase'] = $web;
         }
 
-        return ['enabled' => true, 'firebase' => $firebase];
+        $android = [
+            'project_id' => $projectId,
+            'app_id' => (string) config('push.android.app_id'),
+            'package_name' => (string) config('push.android.package_name'),
+        ];
+
+        if (! in_array('', $android, true)) {
+            $push['android'] = $android;
+        }
+
+        return $push;
     }
 }

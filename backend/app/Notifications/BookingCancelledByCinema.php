@@ -6,6 +6,10 @@ namespace App\Notifications;
 
 use App\Enums\BookingStatus;
 use App\Models\Booking;
+use App\Models\User;
+use App\Notifications\Channels\PushChannel;
+use App\Push\BookingPushContent;
+use App\Push\PushMessage;
 use App\Queue\UsesRetryPolicy;
 use App\Support\Money;
 use Illuminate\Bus\Queueable;
@@ -36,10 +40,29 @@ final class BookingCancelledByCinema extends Notification implements ShouldQueue
 
     public function __construct(public int $bookingId) {}
 
-    /** @return list<string> */
+    /**
+     * Mail zawsze, push przy zgodzie (Etap 9, blok K).
+     *
+     * Odwołany seans to jedyne powiadomienie w tej aplikacji, które klient musi zobaczyć ZANIM
+     * wyjdzie z domu — mail przeczytany wieczorem jest wtedy bez wartości. Dlatego push idzie
+     * obok maila, a nie zamiast niego: kanały mają różne opóźnienia i różne szanse dotarcia.
+     *
+     * @return list<string>
+     */
     public function via(object $notifiable): array
     {
-        return ['mail'];
+        $pushAllowed = config('push.enabled') && $notifiable instanceof User && $notifiable->wantsPush();
+
+        return $pushAllowed ? ['mail', PushChannel::class] : ['mail'];
+    }
+
+    public function toPush(object $notifiable): PushMessage
+    {
+        $booking = Booking::query()
+            ->with(['screening.movie', 'screening.hall.cinema'])
+            ->findOrFail($this->bookingId);
+
+        return BookingPushContent::cancelledByCinema($booking);
     }
 
     public function shouldSend(object $notifiable, string $channel): bool
