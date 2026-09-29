@@ -1098,3 +1098,52 @@ jak w pozostałych powiadomieniach.
 brzmi jak coś, co klient zrobił sam — i pierwsza myśl jest wtedy „to nie ja". Tu decyzja należała
 do kina, więc tytuł brzmi „Kino odwołało seans". Szczegóły (pieniądze, numer rezerwacji, co dalej)
 zostają w mailu; push ma wystarczyć do tego, żeby nie przyjechać pod kino.
+
+## Blok L — odwołanie seansu razem z rezerwacjami
+
+Rozpoznanie zaczęło się od niespodzianki: przycisk „odwołaj seans" w panelu **już był**, od Etapu 7,
+razem z usługą i testami. Miał jednak twardą zasadę — seans z rezerwacjami oczekującymi albo
+opłaconymi odwołać się nie dawał, bo najpierw trzeba było anulować każdą rezerwację osobno,
+z osobnym powodem wpisywanym ręcznie. Przy pełnej sali to kilkaset kliknięć. Blok L to nie
+dopisywanie brakującego przycisku, tylko domknięcie tej dziury.
+
+### Decyzje
+
+**344. Masowe anulowanie NIE rozmawia z operatorem płatności w pętli.** Zwrot to żądanie sieciowe.
+Przy czterdziestu rezerwacjach pętla trwałaby minuty w jednym żądaniu HTTP z panelu (i tak
+skończyłaby się limitem czasu), a awaria przy trzydziestej dziewiątej zostawiłaby trzydzieści
+osiem zwrotów już wysłanych — bez żadnego sposobu, żeby je cofnąć. Robimy więc tylko krok
+bazodanowy: miejsca wracają do sprzedaży natychmiast, klient dostaje powiadomienie natychmiast,
+a rozliczenie zostaje jako `refund_requested_at` bez `refund_completed_at`. Tę listę i tak co pięć
+minut przerabia `cinema:bookings:retry-refunds`. To nie jest obejście — to ta sama ścieżka, którą
+system przewidział na niedostępność operatora, użyta tu z tego samego powodu: nie chcemy trzymać
+człowieka przed ekranem, dopóki Stripe odpowie czterdzieści razy. W panelu piszemy o tym wprost,
+bo administrator, który tego nie wie, sprawdzi rezerwację, zobaczy „zwrot w toku" i uzna, że coś
+się zacięło.
+
+**345. Każda rezerwacja anulowana w OSOBNEJ transakcji.** Jedna transakcja na całą pętlę
+trzymałaby blokady wierszy przez cały przebieg i cofnęłaby wszystko przy jednym błędzie — łącznie
+z trzydziestoma dziewięcioma anulowaniami, które się udały. Osobne transakcje znaczą, że kłopot
+dotyczy jednego klienta, a raport mówi, którego.
+
+**346. Awaria jednej rezerwacji nie przerywa reszty, ale BLOKUJE odwołanie seansu.** Dwie różne
+rzeczy i obie ważne. Nie przerywamy, bo jeden zacięty rekord nie może zostawić trzydziestu
+dziewięciu osób bez powiadomienia. Ale seansu nie odwołujemy, dopóki choć jedna rezerwacja żyje —
+inaczej ktoś zostałby z ważnym biletem na seans, którego nie ma, i dowiedziałby się o tym pod
+drzwiami sali. Przy okazji stara zasada `cancel()` („seans ma rezerwacje") zostaje jako ostatnia
+linia obrony: gdyby ktoś kupił bilet między pętlą a odwołaniem seansu, to ona to zatrzyma.
+
+**347. Potwierdzenie pokazuje LICZBY, a nie pytanie „na pewno?".** Przeglądarkowe `wire:confirm`
+nie potrafi powiedzieć, ilu klientów dostanie powiadomienie ani ile pieniędzy wróci — a to jedyna
+akcja w całym systemie, która jednym kliknięciem anuluje cudze zakupy i uruchamia zwroty. Dlatego
+osobny krok w komponencie: ile rezerwacji, jaka kwota, pole na powód (wymagane, zapisywane przy
+każdej rezerwacji, klient go nie widzi) i dopiero wtedy przycisk. Liczby wyliczamy dopiero przy
+pokazywaniu potwierdzenia, żeby zwykła edycja seansu nie płaciła za trzy zapytania, których nikt
+nie ogląda.
+
+**348. Stara metoda komponentu ZNIKA, a nie zostaje „na wszelki wypadek".** `cancelScreening()`
+odwoływała seans bez rezerwacji i po tej zmianie nie miała już w widoku żadnego przycisku. Metoda
+Livewire, do której nie prowadzi nic z interfejsu, jest nadal wywoływalna z przeglądarki — została
+jej tylko autoryzacja. Trzymanie dwóch dróg do tej samej operacji, z których jedna pomija
+potwierdzenie z liczbami, przeczyłoby decyzji 347. Trzy testy, które jej używały, przeszły na nową
+ścieżkę; zasadę „seans ma rezerwacje" nadal pilnuje test na poziomie usługi.

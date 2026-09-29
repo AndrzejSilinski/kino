@@ -4,12 +4,15 @@ declare(strict_types=1);
 
 namespace App\Livewire\Admin\Screenings;
 
+use App\Enums\BookingStatus;
 use App\Enums\LanguageVersion;
 use App\Enums\ProjectionType;
 use App\Enums\ScreeningStatus;
+use App\Exceptions\BookingCancellationException;
 use App\Exceptions\InvalidScreeningException;
 use App\Exceptions\ScreeningConflictException;
 use App\Exceptions\StructureChangeBlockedException;
+use App\Models\Booking;
 use App\Models\Cinema;
 use App\Models\Hall;
 use App\Models\Movie;
@@ -17,6 +20,8 @@ use App\Models\PriceCategory;
 use App\Models\Screening;
 use App\Models\Seat;
 use App\Services\Admin\ScreeningAdminService;
+use App\Services\Admin\ScreeningCancellationService;
+use App\Support\Money;
 use App\Support\ScreeningTimeline;
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\View\View;
@@ -60,6 +65,15 @@ final class ScreeningForm extends Component
     public array $prices = [];
 
     public ?string $problem = null;
+
+    /** Potwierdzenie odwołania seansu RAZEM z rezerwacjami (Etap 9, blok L). */
+    public bool $confirmingMassCancel = false;
+
+    /** Powód anulowania — ten sam, który dostaną wszystkie rezerwacje seansu. */
+    public string $cancelReason = '';
+
+    /** Komunikat z raportu: ile anulowano, ile zwrotów czeka na rozliczenie. */
+    public ?string $cancelReport = null;
 
     public function mount(?Cinema $cinema = null, ?Screening $screening = null): void
     {
@@ -213,7 +227,28 @@ final class ScreeningForm extends Component
         ]);
     }
 
-    public function cancelScreening(ScreeningAdminService $service): void
+    /**
+     * Pokazuje potwierdzenie z LICZBAMI (decyzja 347).
+     *
+     * Osobny krok, a nie `wire:confirm`: przeglądarkowe „na pewno?" nie potrafi powiedzieć,
+     * ilu klientów dostanie powiadomienie ani ile pieniędzy wróci, a to jedyna akcja w panelu,
+     * która jednym kliknięciem anuluje cudze zakupy.
+     */
+    public function askMassCancel(): void
+    {
+        $this->problem = null;
+        $this->cancelReport = null;
+        $this->confirmingMassCancel = true;
+    }
+
+    public function dismissMassCancel(): void
+    {
+        $this->confirmingMassCancel = false;
+        $this->reset('cancelReason');
+    }
+
+    /** Odwołanie seansu razem z jego rezerwacjami. */
+    public function cancelScreeningWithBookings(ScreeningCancellationService $service): void
     {
         abort_if($this->screeningId === null, 404);
 
@@ -222,18 +257,42 @@ final class ScreeningForm extends Component
         $this->problem = null;
 
         try {
-            $service->cancel($screening);
+            $report = $service->cancelWithBookings($screening, auth()->user(), $this->cancelReason);
+        } catch (BookingCancellationException $e) {
+            $this->addError('cancelReason', $e->getMessage());
+
+            return;
         } catch (StructureChangeBlockedException $e) {
             $this->problem = $e->getMessage();
 
             return;
         }
 
-        session()->flash('status', 'Odwołano seans. Termin w sali jest wolny.');
+        if (! $report->screeningCancelled) {
+            // Część rezerwacji została — seansu NIE odwołujemy (decyzja 346),
+            // bo ktoś zostałby z ważnym biletem na seans, którego nie ma.
+            $this->cancelReport = $report->message();
+            $this->confirmingMassCancel = false;
+
+            return;
+        }
+
+        session()->flash('status', $report->message());
         $this->redirectRoute('admin.cinemas.screenings.index', [
             'cinema' => Cinema::query()->whereKey($this->cinemaId)->value('slug'),
             'od' => $this->date,
         ]);
+    }
+
+    /** Suma rezerwacji OPŁACONYCH — tyle realnie wróci do klientów. */
+    private function moneyAtStake(Screening $screening): string
+    {
+        $amount = (int) Booking::query()
+            ->where('screening_id', $screening->id)
+            ->where('status', BookingStatus::Paid)
+            ->sum('total_amount');
+
+        return Money::minor($amount)->toArray()['formatted'];
     }
 
     public function render(): View
@@ -257,6 +316,11 @@ final class ScreeningForm extends Component
             'preview' => $this->preview($cinema),
             'lockedReason' => $screening === null ? null : $this->lockedReason($screening, $service),
             'canCancel' => $screening !== null && $screening->status === ScreeningStatus::Scheduled && $screening->starts_at->isFuture(),
+            // Liczby do potwierdzenia (decyzja 347): ile rezerwacji i ile pieniędzy.
+            // Liczymy je dopiero przy pokazywaniu potwierdzenia, żeby zwykła edycja
+            // seansu nie płaciła za trzy zapytania, których nikt nie ogląda.
+            'sales' => $screening === null || ! $this->confirmingMassCancel ? null : $service->salesActivity($screening),
+            'salesMoney' => $screening === null || ! $this->confirmingMassCancel ? null : $this->moneyAtStake($screening),
         ])->title($this->screeningId === null ? 'Nowy seans' : 'Edycja seansu');
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests\Feature\Admin;
 
+use App\Enums\BookingStatus;
 use App\Enums\ScreeningStatus;
 use App\Livewire\Admin\Screenings\ScreeningForm;
 use App\Livewire\Admin\Screenings\ScreeningWeek;
@@ -214,11 +215,31 @@ final class ScreeningPanelTest extends TestCase
             ->set('time', '19:00')
             ->call('save')
             ->assertSet('problem', fn (?string $problem): bool => str_contains((string) $problem, 'Seans ma sprzedaż'))
-            ->call('cancelScreening')
-            ->assertSet('problem', fn (?string $problem): bool => str_contains((string) $problem, 'rezerwacje oczekujące albo opłacone (1)'));
+            // Odwołanie seansu z rezerwacjami jest teraz możliwe, ale za potwierdzeniem,
+            // które pokazuje LICZBY (Etap 9, decyzja 347).
+            ->call('askMassCancel')
+            ->assertSet('confirmingMassCancel', true)
+            ->assertSee('Anulowanych zostanie')
+            ->assertSee('dostaną maila i powiadomienie push');
 
         $this->assertSame('2026-10-05 16:00', $screening->fresh()->starts_at->utc()->format('Y-m-d H:i'));
         $this->assertSame(ScreeningStatus::Scheduled, $screening->fresh()->status);
+    }
+
+    public function test_confirmation_alone_changes_nothing(): void
+    {
+        // Samo otwarcie potwierdzenia nie może niczego anulować: to jedyna akcja
+        // w panelu, która jednym kliknięciem rusza cudze zakupy.
+        $screening = $this->screeningAt('2026-10-05 18:00');
+        $booking = Booking::factory()->paid()->create(['screening_id' => $screening->id]);
+
+        Livewire::actingAs($this->admin())->test(ScreeningForm::class, ['screening' => $screening])
+            ->call('askMassCancel')
+            ->call('dismissMassCancel')
+            ->assertSet('confirmingMassCancel', false);
+
+        $this->assertSame(ScreeningStatus::Scheduled, $screening->fresh()->status);
+        $this->assertSame(BookingStatus::Paid, $booking->fresh()->status);
     }
 
     public function test_cancel_frees_the_slot_and_returns_to_grid(): void
@@ -226,7 +247,9 @@ final class ScreeningPanelTest extends TestCase
         $screening = $this->screeningAt('2026-10-05 18:00');
 
         Livewire::actingAs($this->admin())->test(ScreeningForm::class, ['screening' => $screening])
-            ->call('cancelScreening')
+            ->call('askMassCancel')
+            ->set('cancelReason', 'Awaria projektora w sali A.')
+            ->call('cancelScreeningWithBookings')
             ->assertRedirect(route('admin.cinemas.screenings.index', ['cinema' => $this->cinema, 'od' => '2026-10-05']));
 
         $this->assertSame(ScreeningStatus::Cancelled, $screening->fresh()->status);
@@ -243,7 +266,7 @@ final class ScreeningPanelTest extends TestCase
 
         $component = Livewire::actingAs($admin)->test(ScreeningForm::class, ['screening' => $screening]);
         $this->actingAs($staff);
-        $component->call('cancelScreening')->assertForbidden();
+        $component->call('cancelScreeningWithBookings')->assertForbidden();
         $this->assertSame(ScreeningStatus::Scheduled, $screening->fresh()->status);
 
         $component = Livewire::actingAs($admin)->test(ScreeningForm::class, ['screening' => $screening]);

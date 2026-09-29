@@ -95,9 +95,57 @@
 
     @if ($canCancel)
         <hr>
-        <button type="button" class="secondary outline" wire:click="cancelScreening"
-                wire:confirm="Odwołać ten seans? Termin w sali się zwolni, a seans zniknie z repertuaru.">
-            Odwołaj seans
-        </button>
+
+        @if ($cancelReport)
+            <article role="alert"><strong>{{ $cancelReport }}</strong></article>
+        @endif
+
+        @if ($confirmingMassCancel)
+            {{--
+                Potwierdzenie z LICZBAMI (decyzja 347). Przeglądarkowe „na pewno?" nie potrafi
+                powiedzieć, ilu klientów dostanie powiadomienie ani ile pieniędzy wróci —
+                a to jedyna akcja w panelu, która jednym kliknięciem anuluje cudze zakupy.
+            --}}
+            <article>
+                <header><strong>Odwołać seans razem z rezerwacjami?</strong></header>
+
+                @if ($sales['bookings'] > 0)
+                    <p>
+                        Anulowanych zostanie <strong>{{ $sales['bookings'] }}</strong>
+                        {{ $sales['bookings'] === 1 ? 'rezerwacja' : 'rezerwacji' }},
+                        a klienci dostaną maila i powiadomienie push.
+                        Do zwrotu: <strong>{{ $salesMoney }}</strong>.
+                    </p>
+                    <p><small>
+                        Zwroty rozlicza zadanie w tle (przebiega co pięć minut) — w panelu
+                        rezerwacji zobaczysz je najpierw jako „zwrot w toku".
+                    </small></p>
+                @else
+                    <p>Ten seans nie ma rezerwacji. Termin w sali po prostu się zwolni.</p>
+                @endif
+
+                <label>
+                    Powód anulowania (zapisujemy go przy każdej rezerwacji, klient go nie widzi)
+                    <input type="text" wire:model="cancelReason" maxlength="500"
+                           placeholder="np. awaria projektora w sali A">
+                    @error('cancelReason') <small role="alert">{{ $message }}</small> @enderror
+                </label>
+
+                <footer>
+                    <button type="button" wire:click="cancelScreeningWithBookings"
+                            wire:loading.attr="disabled" wire:target="cancelScreeningWithBookings">
+                        <span wire:loading.remove wire:target="cancelScreeningWithBookings">Tak, odwołaj seans</span>
+                        <span wire:loading wire:target="cancelScreeningWithBookings">Odwołuję…</span>
+                    </button>
+                    <button type="button" class="secondary outline" wire:click="dismissMassCancel">
+                        Nie, wróć
+                    </button>
+                </footer>
+            </article>
+        @else
+            <button type="button" class="secondary outline" wire:click="askMassCancel">
+                Odwołaj seans
+            </button>
+        @endif
     @endif
 </section>
