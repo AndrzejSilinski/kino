@@ -43,12 +43,13 @@ class StripeWebhookController extends Controller
         StripeWebhookEvent::create([
             'event_id' => $event->id,
             'type' => $event->type,
-            'payment_intent_id' => $event->intent?->id,
+            // Etap 10, blok C: zdarzenia o zwrocie niosą płatność w obiekcie zwrotu.
+            'payment_intent_id' => $event->paymentIntentId(),
             // Osobne zapytanie zamiast przekazywania identyfikatora przez
             // serwis: to pole jest wyłącznie audytowe i nie warto dla
             // niego komplikować sygnatury handleEvent().
-            'booking_id' => $event->intent === null ? null : Booking::query()
-                ->where('stripe_payment_intent_id', $event->intent->id)
+            'booking_id' => $event->paymentIntentId() === null ? null : Booking::query()
+                ->where('stripe_payment_intent_id', $event->paymentIntentId())
                 ->value('id'),
             'stripe_created_at' => $event->createdAt,
             'outcome' => $outcome,

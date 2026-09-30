@@ -50,6 +50,24 @@ final class Labels
         };
     }
 
+    /**
+     * Powód nieudanego zwrotu (Etap 10, blok C) — kody Stripe'a z Refund::FAILURE_REASON_*.
+     * Nieznany kod pokazujemy dosłownie: operator może dodać nowy, a panel nie może wtedy milczeć.
+     */
+    public static function refundFailureReason(?string $code): string
+    {
+        return match ($code) {
+            'lost_or_stolen_card' => 'karta zgłoszona jako zgubiona lub skradziona',
+            'expired_or_canceled_card' => 'karta wygasła lub została zamknięta',
+            'charge_for_pending_refund_disputed' => 'płatność jest przedmiotem sporu (chargeback)',
+            'insufficient_funds' => 'brak środków na koncie kina u operatora płatności',
+            'declined' => 'bank klienta odrzucił zwrot',
+            'merchant_request' => 'zwrot anulowany na żądanie kina',
+            null, 'unknown' => 'operator nie podał przyczyny',
+            default => 'kod operatora: '.$code,
+        };
+    }
+
     public static function ticketStatus(TicketStatus $status): string
     {
         return match ($status) {

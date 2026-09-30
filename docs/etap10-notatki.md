@@ -393,3 +393,57 @@ może mieć funkcji globalnych o nazwach pomocników frameworka (`event`, `app`,
 `report`…) — prefiks albo klasa; i druga, szersza: narzędzie testowe, które po cichu robi co
 innego niż kod produkcyjny, daje wynik o niczym. Wyszło przed wysłaniem paczki tylko dlatego,
 że sonda miała po mojej stronie prawdziwy Reverb (decyzja 385).
+
+Wynik bloku B2 (commit `6c717c3`): sonda 15/15 PASS przez nginx i Reverb u Andrzeja, kontrola
+ujemna 7/15 z kodem 1, po obu zero danych sondy w bazie. Przed blokiem baza deweloperska nie
+miała już ani jednego przyszłego seansu — seeder liczy repertuar od chwili uruchomienia
+(2 dni wstecz, 13 naprzód), a baza była wypełniona dawno. Andrzej odświeżył ją
+(`migrate:fresh --seed`). **Do bloku D i do przygotowania rozmowy:** dane demonstracyjne się
+starzeją; przed prezentacją trzeba je odświeżyć, a entrypoint musi to uwzględnić.
+
+---
+
+## Blok C — nieudany zwrot (`refund.failed`) i „Stan prac”
+
+### Decyzje
+
+**386. Nieudany zwrot to znacznik rozliczenia, a nie nowy status rezerwacji.** Kolumny
+`refund_failed_at` i `refund_failure_reason` (kod dostawcy, np. `expired_or_canceled_card`)
+obok `refund_requested_at` i `refund_completed_at` z Etapu 7, z CHECK „nie ma porażki bez
+zlecenia”. Status wraca z „zwrócona” na „anulowana” — miejsca i bilety są anulowane, a pieniądze
+do klienta nie dotarły. Odrzucone: nowy status `refund_failed` — rozszedłby się po CHECK
+w bazie, API, froncie Vue i aplikacji Fluttera, które dziś znają pięć statusów.
+
+**387. Nieudanego zwrotu NIE ponawiamy automatycznie.** Rozliczenie zostaje zamknięte
+(`refund_completed_at`), więc komenda `cinema:bookings:retry-refunds` go nie weźmie. Karta
+zamknięta, zgubiona albo objęta sporem odrzuci każdą kolejną próbę, a każda próba to kolejne
+zdarzenia i opłaty po stronie operatora. Panel pokazuje „zwrot NIEUDANY” z powodem po polsku
+(`Labels::refundFailureReason`, nieznany kod — dosłownie), w logu idzie ostrzeżenie z
+referencją rezerwacji i kodem przyczyny, bez danych osobowych. Zwrot inną drogą to decyzja
+człowieka. Klient dostaje zmianę statusu na kanale rezerwacji, a feed sprzedaży — wpis.
+
+**388. Webhook zna zdarzenia o obiekcie ZWROTU.** `WebhookEventData` dostał pole `refund`
+(`RefundData`: identyfikator, płatność, czy nieudany, kod przyczyny) i metodę
+`paymentIntentId()`, z której dziennik zdarzeń bierze płatność i rezerwację także dla
+zdarzeń o zwrocie. Adapter Stripe'a przyjmuje `payment_intent` jako identyfikator albo
+rozwinięty obiekt. Test przechodzi przez prawdziwy adapter i podpis (`RefundFailedWebhookTest`).
+Poza kodem: endpoint webhooka w panelu Stripe'a musi mieć zaznaczone `refund.failed`.
+
+**389. Wyścig „porażka przed zapisem przyjęcia” zamyka jeden warunek.** `refund.failed` potrafi
+przyjść w milisekundach między odpowiedzią operatora na zlecenie zwrotu a transakcją, która
+zapisuje jego przyjęcie. `failRefund()` ustawia wtedy `refund_completed_at`, a `completeRefund()`
+już dziś kończy się na „rozliczenie zamknięte” — nie ustawi „zwrócona”. Pułapka ER.
+
+**390. Etap 9 zaznaczony w „Stanie prac”** (dług z listy promptu Etapu 10).
+
+### Pułapki
+
+**ER. Warunek obronny, którego nie wymusza żaden test, tylko udaje zabezpieczenie.** Objaw:
+pierwsza wersja `completeRefund()` dostała osobny warunek „jeśli zwrot oznaczono jako nieudany —
+nic nie rób”. Test wyścigu przechodził. Mutacja — usunięcie tego warunku — test też przechodził.
+Przyczyna: `failRefund()` zawsze zamyka rozliczenie, więc stary warunek „rozliczenie już
+zamknięte” zatrzymywał wywołanie wcześniej; nowy był martwy. Warunek usunięty, a komentarz
+przeniesiony tam, gdzie naprawdę zapada decyzja; mutacja TEJ linii (bez zamknięcia
+rozliczenia) test wywraca. Nauczka: kod obronny sprawdza się mutacją — jeśli po usunięciu
+warunku żaden test nie pada, to albo brakuje testu, albo warunek jest zbędny, a zbędny
+warunek wprowadza czytelnika w błąd co do tego, gdzie jest zabezpieczenie.

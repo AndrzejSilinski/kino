@@ -269,7 +269,7 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 - [x] Etap 6 — WebSocket (Laravel Reverb)
 - [x] Etap 7 — panel administracyjny (Livewire), cache w Redisie, moduł informacyjny
 - [x] Etap 8 — frontend Vue 3 (SPA), konto klienta, Web Push przez FCM
-- [ ] Etap 9 — aplikacja Flutter
+- [x] Etap 9 — aplikacja Flutter
 - [ ] Etap 10 — CI/CD i dokumentacja
 
 ---
@@ -291,7 +291,7 @@ wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
 
 | Zestaw | Testów | Klas / plików | Uruchomienie |
 |---|---:|---|---|
-| PHPUnit | **495** | 69 klas | <code>docker compose exec php php artisan test</code> |
+| PHPUnit | **501** | 70 klas | <code>docker compose exec php php artisan test</code> |
 | Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
 | Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
 
@@ -2268,7 +2268,12 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
 - **Feed pulpitu to ostatnie zmiany, nie pełna historia zdarzeń** — po przerwie połączenia
   odtwarzamy stan rezerwacji z bazy, a nie każde przejście.
 - **Zwrot uznajemy za zakończony po przyjęciu przez Stripe** (`pending` albo `succeeded`);
-  zwrot, który Stripe odrzuci później (zdarzenie „refund.failed”), wymaga obsługi webhooka.
+  ~~zwrot, który Stripe odrzuci później (zdarzenie „refund.failed”), wymaga obsługi webhooka~~ —
+  **rozwiązane w Etapie 10** (blok C): `refund.failed` cofa status „zwrócona” na „anulowana”,
+  zapisuje `refund_failed_at` i kod przyczyny (`refund_failure_reason`), panel pokazuje powód po
+  polsku, a zwrotu NIE ponawiamy automatycznie — zamknięta albo zgubiona karta odrzuci każdą
+  kolejną próbę. Testy: `RefundFailedWebhookTest`. Na serwerze endpoint webhooka w panelu Stripe'a
+  musi mieć zaznaczone zdarzenie `refund.failed` (<code>stripe listen</code> przekazuje wszystkie).
 - **Osierocone pliki plakatów** po awarii między zapisem pliku a COMMIT — nieszkodliwe,
   sprzątanie komendą w Etapie 10.
 - **Data publikacji artykułów w jednej strefie sieci** (Europe/Warsaw).

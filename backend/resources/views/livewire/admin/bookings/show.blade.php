@@ -28,7 +28,11 @@
             @endif
             @if ($booking->refund_requested_at)
                 <p><small>Rozliczenie płatności:
-                    @if ($booking->refund_completed_at === null)
+                    @if ($booking->refund_failed_at)
+                        <strong>zwrot NIEUDANY</strong> {{ $at($booking->refund_failed_at) }}
+                        ({{ \App\Support\Labels::refundFailureReason($booking->refund_failure_reason) }}).
+                        Pieniądze wróciły na konto kina u operatora płatności — zwrot klientowi inną drogą.
+                    @elseif ($booking->refund_completed_at === null)
                         w toku od {{ $at($booking->refund_requested_at) }} — ponawiane automatycznie
                     @elseif ($booking->status->value === 'refunded')
                         pieniądze zwrócone {{ $at($booking->refund_completed_at) }}

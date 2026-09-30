@@ -17,6 +17,7 @@ use Stripe\Exception\RateLimitException;
 use Stripe\Exception\SignatureVerificationException;
 use Stripe\HttpClient\CurlClient;
 use Stripe\PaymentIntent;
+use Stripe\Refund;
 use Stripe\StripeClient;
 use Stripe\Webhook;
 use UnexpectedValueException;
@@ -145,6 +146,23 @@ final class StripePaymentGateway implements PaymentGateway
             type: $event->type,
             createdAt: CarbonImmutable::createFromTimestampUTC($event->created),
             intent: $object instanceof PaymentIntent ? $this->toData($object) : null,
+            refund: $object instanceof Refund ? $this->toRefundData($object) : null,
+        );
+    }
+
+    /**
+     * Zwrot Stripe'a -> nasze DTO (Etap 10, blok C). payment_intent bywa identyfikatorem
+     * albo rozwiniętym obiektem (expand) — bierzemy identyfikator w obu przypadkach.
+     */
+    private function toRefundData(Refund $refund): RefundData
+    {
+        $intent = $refund->payment_intent ?? null;
+
+        return new RefundData(
+            id: (string) $refund->id,
+            paymentIntentId: $intent instanceof PaymentIntent ? (string) $intent->id : ($intent === null ? null : (string) $intent),
+            failed: $refund->status === Refund::STATUS_FAILED,
+            failureReason: $refund->failure_reason ?? null,
         );
     }
 

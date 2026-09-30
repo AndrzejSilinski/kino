@@ -18,6 +18,7 @@ use App\Notifications\BookingCancelledByCinema;
 use App\Payments\PaymentGateway;
 use App\Payments\PaymentIntentData;
 use App\Payments\PaymentIntentStatus;
+use App\Payments\RefundData;
 use App\Payments\RefundOutcome;
 use App\Payments\WebhookEventData;
 use Illuminate\Support\Facades\Log;
@@ -174,6 +175,11 @@ class PaymentService
      */
     public function handleEvent(WebhookEventData $event): string
     {
+        // Etap 10, blok C: zwrot, który operator przyjął, a potem odrzucił bank albo karta.
+        if ($event->type === 'refund.failed') {
+            return $this->onRefundFailed($event->refund);
+        }
+
         $intent = $event->intent;
 
         if ($intent === null) {
@@ -206,6 +212,39 @@ class PaymentService
             'payment_intent.canceled' => $this->onCanceled($booking),
             default => 'ignored',
         };
+    }
+
+    /**
+     * Nieudany zwrot (Etap 10, blok C). Pieniądze wróciły na konto kina u operatora,
+     * a klient ich nie dostał — tego NIE ponawiamy automatycznie: karta zamknięta albo
+     * zgubiona odrzuci każdą kolejną próbę. Rezerwacja wraca do statusu "anulowana",
+     * panel pokazuje powód, a zwrot inną drogą to decyzja człowieka.
+     */
+    private function onRefundFailed(?RefundData $refund): string
+    {
+        if ($refund === null || ! $refund->failed || $refund->paymentIntentId === null) {
+            return 'ignored';
+        }
+
+        $booking = Booking::query()->where('stripe_payment_intent_id', $refund->paymentIntentId)->first();
+
+        if ($booking === null) {
+            Log::warning('Nieudany zwrot bez rezerwacji.', ['intent' => $refund->paymentIntentId]);
+
+            return 'unknown_booking';
+        }
+
+        $outcome = $this->bookings->failRefund($booking, $refund->failureReason);
+
+        if ($outcome === 'refund_failed') {
+            // Bez danych osobowych: referencja rezerwacji i kod dostawcy wystarczą obsłudze.
+            Log::warning('Zwrot pieniędzy nie powiódł się u operatora płatności.', [
+                'booking' => $booking->reference,
+                'reason' => $refund->failureReason,
+            ]);
+        }
+
+        return $outcome;
     }
 
     private function findBooking(PaymentIntentData $intent): ?Booking

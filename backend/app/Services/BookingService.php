@@ -474,6 +474,8 @@ class BookingService
         return DB::transaction(function () use ($booking, $moneyReturned): bool {
             $fresh = Booking::query()->whereKey($booking->id)->lockForUpdate()->firstOrFail();
 
+            // Etap 10, blok C: rozliczenie zamknięte jako NIEUDANE (refund.failed przyszło, zanim
+            // zapisaliśmy przyjęcie zwrotu) też ma refund_completed_at — ten warunek je zatrzymuje.
             if ($fresh->refund_requested_at === null || $fresh->refund_completed_at !== null) {
                 return false;
             }
@@ -492,6 +494,55 @@ class BookingService
             }
 
             return true;
+        });
+    }
+
+    /**
+     * Zwrot odrzucony przez operatora po przyjęciu (Etap 10, blok C, zdarzenie refund.failed).
+     *
+     * Zwraca wynik zapisywany w dzienniku webhooków:
+     *  - refund_not_requested — zwrotu nie zlecało kino (np. ręczny zwrot w panelu Stripe'a),
+     *  - refund_failure_known — to samo niepowodzenie już zapisane (inne zdarzenie o tym zwrocie),
+     *  - refund_failed        — zapisane teraz.
+     *
+     * Rozliczenie zostaje ZAMKNIĘTE (refund_completed_at), więc komenda ponawiająca go nie
+     * weźmie; status "zwrócona" wraca do "anulowana", bo pieniądze do klienta nie dotarły.
+     */
+    public function failRefund(Booking $booking, ?string $reason): string
+    {
+        return DB::transaction(function () use ($booking, $reason): string {
+            $fresh = Booking::query()->whereKey($booking->id)->lockForUpdate()->firstOrFail();
+
+            if ($fresh->refund_requested_at === null) {
+                return 'refund_not_requested';
+            }
+
+            if ($fresh->refund_failed_at !== null) {
+                return 'refund_failure_known';
+            }
+
+            $now = CarbonImmutable::now();
+            $fresh->refund_failed_at = $now;
+            // Kod dostawcy, nie tekst od użytkownika; długość kolumny to zabezpieczenie.
+            $fresh->refund_failure_reason = $reason === null ? null : mb_substr($reason, 0, 50);
+            // Zamyka rozliczenie: komenda ponawiająca go nie weźmie, a completeRefund(), które
+            // mogłoby przyjść później (wyścig z odpowiedzią operatora), nie ustawi "zwrócona".
+            $fresh->refund_completed_at ??= $now;
+
+            $wasRefunded = $fresh->status === BookingStatus::Refunded;
+            if ($wasRefunded) {
+                $fresh->status = BookingStatus::Cancelled;
+            }
+
+            $fresh->save();
+
+            if ($wasRefunded) {
+                // Klient widział "zwrócona" — kanał rezerwacji i feed sprzedaży muszą to cofnąć.
+                $bookingId = (int) $fresh->id;
+                DB::afterCommit(fn () => $this->realtime->bookingChanged($bookingId, BookingStatus::Cancelled));
+            }
+
+            return 'refund_failed';
         });
     }
 

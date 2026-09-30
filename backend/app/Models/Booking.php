@@ -36,6 +36,7 @@ class Booking extends Model
             // Rozliczenie płatności po anulowaniu przez administratora (Etap 7, blok K).
             'refund_requested_at' => 'datetime',
             'refund_completed_at' => 'datetime',
+            'refund_failed_at' => 'datetime',
         ];
     }
 
