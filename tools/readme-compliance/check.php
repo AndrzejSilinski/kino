@@ -20,18 +20,24 @@ declare(strict_types=1);
  *
  * Etap 9, blok O: także aplikacja mobilna — kod Darta (klasy, enumy, miksiny), zasoby Androida
  * i pliki konfiguracyjne Gradle'a, oraz tabela testów Fluttera porównywana z raportem
- * "flutter test --machine", który wykonawca paczek zostawia w mobile/build/etap9/test.json.
+ * "flutter test --machine", który wykonawca paczek zostawia w FLUTTER_REPORT.
  * Brak raportu = BRAK, tak samo jak przy Viteście.
  *
  * Etap 8, blok O: także nazwy z frontu (frontend/src, frontend/public, package.json, konfiguracja
  * Vite i TypeScript), komponenty Vue i eksporty TypeScript jako "klasy", pliki po samej nazwie
  * (np. vHtmlGuard.spec.ts) oraz tabela testów Vitest porównywana z raportem JSON, który zapisuje
- * wykonawca paczek (frontend/node_modules/.cache/etap8/vitest.json). Brak raportu = BRAK.
+ * wykonawca paczek (VITEST_REPORT). Brak raportu = BRAK.
+ *
+ * Etap 10, blok A (pułapka EI): ścieżki raportów BEZ numeru etapu. Stała wskazywała katalog
+ * .cache/etap8, a wykonawca Etapu 9 pisał już do .cache/etap9 — sprawdzacz dostawał "brak raportu"
+ * dla całej tabeli Vitest i nikt tego nie widział, bo sekcji Etapu 8 nikt już nie sprawdzał.
+ * Te same dwie ścieżki są w wykonawcy (ETAP9_VITEST_REPORT, ETAP9_FLUTTER_REPORT) i w CI;
+ * test dymny bloku A porównuje je ze sobą, zamiast ufać, że ktoś pamięta o obu miejscach.
  */
 
 const MIN_CHECKED = 100;
-const VITEST_REPORT = 'frontend/node_modules/.cache/etap8/vitest.json';
-const FLUTTER_REPORT = 'mobile/build/etap9/test.json';
+const VITEST_REPORT = 'frontend/node_modules/.cache/testy/vitest.json';
+const FLUTTER_REPORT = 'mobile/build/testy/test.json';
 const SEARCH_DIRS = ['backend/app', 'backend/config', 'backend/database', 'backend/routes', 'backend/resources',
     'backend/tests', 'backend/bootstrap', 'backend/public/js', 'backend/public/vendor/admin', 'docker', 'tools',
     'frontend/src', 'frontend/public', 'mobile/lib', 'mobile/test', 'mobile/android/app/src'];

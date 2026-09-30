@@ -1,0 +1,29 @@
+# Etap 10, blok A: konfiguracja gitleaks — wspólna dla wykonawcy paczek i CI.
+#
+# Reguły domyślne gitleaks v8.30.1 (obraz przypięty po digeście w wykonawcy i w CI) plus JEDEN
+# wyjątek: trzy atrapy kluczy z testów PHP. Wyciszamy DOKŁADNE wartości, a nie pliki ani regułę
+# (decyzja 364): prawdziwy klucz wklejony do tego samego testu nadal zatrzyma blok,
+# a reguła generic-api-key działa w całym repozytorium.
+#
+# Odciski z .gitleaksignore odrzucone: zawierają numer linii i commit, więc dopisanie jednej linii
+# nad atrapą unieważnia wyjątek (znalezisko z ClientConfigApiTest.php:43 ma dziś inną linię niż
+# w commicie b12dbc2), a dokumentacja nazywa tę funkcję eksperymentalną.
+#
+# NOWA ATRAPA W TESTACH: dopisz jej wartość tutaj, zakotwiczoną ^...$, z nazwą pliku w komentarzu.
+# Wartości nie mogą pochodzić z backend/.env — wykonawca sprawdza to osobno, dosłownym porównaniem.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Atrapy kluczy w testach PHP (wartości jawnie nieprawdziwe)"
+targetRules = ["generic-api-key"]
+regexTarget = "secret"
+regexes = [
+    # backend/tests/Feature/Api/BroadcastingAuthTest.php, backend/tests/Feature/Api/ClientConfigApiTest.php
+    '''^sekret-reverb-0123456789abcdef$''',
+    # backend/tests/Feature/Api/BroadcastingAuthTest.php
+    '''^test-sekret-reverb-0123456789abcdef$''',
+    # backend/tests/Unit/TicketTokenSignerTest.php
+    '''^0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$''',
+]
