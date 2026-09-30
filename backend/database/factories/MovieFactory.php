@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Database\Factories;
 
 use App\Models\Movie;
+use App\Services\Admin\MovieAdminService;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Str;
 
@@ -29,7 +30,9 @@ class MovieFactory extends Factory
             // seansów są przewidywalne i nie wpadają na constraint EXCLUDE.
             'duration_minutes' => 120,
             'poster_path' => null,
-            'age_rating' => fake()->randomElement(['G', '7+', '13+', '16+', '18+']),
+            // Etap 10, blok B: te same kategorie co w panelu i w seederze (polskie oznaczenia),
+            // a nie amerykańskie G/13+ — fabryka nie może tworzyć danych, których aplikacja nie zna.
+            'age_rating' => fake()->randomElement(MovieAdminService::AGE_RATINGS),
             'genres' => ['dramat', 'thriller'],
             'premiere_date' => now()->subDays(fake()->numberBetween(0, 60))->toDateString(),
             'is_active' => true,

@@ -44,7 +44,7 @@ final class TicketPdfRendererTest extends TestCase
             'timezone' => 'Europe/Warsaw',
         ]);
         $hall = Hall::factory()->for($cinema)->withSeats(1, 3)->create(['name' => 'Sala Złota']);
-        $movie = Movie::factory()->create(['title' => 'Zażółć gęślą jaźń', 'age_rating' => '13+']);
+        $movie = Movie::factory()->create(['title' => 'Zażółć gęślą jaźń', 'age_rating' => '12']);
 
         // 17:30 UTC w styczniu to 18:30 w Warszawie (czas zimowy, UTC+1).
         $startsAt = CarbonImmutable::parse('2027-01-15 17:30:00', 'UTC');

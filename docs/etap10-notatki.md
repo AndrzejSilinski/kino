@@ -274,3 +274,64 @@ został przekroczony. Nauczka: w teście oczekiwanie z limitem czasu jest w porz
 wtedy, gdy czekamy na coś, co z definicji trwa krótko; gdy po drodze jest ładowanie kodu,
 sieć albo dysk, test mierzy maszynę, a nie aplikację — i w CI, na współdzielonych
 maszynach, taki test „czasem pada”, czyli uczy ignorować czerwony wynik.
+
+Wynik bloku A2 (commit `b41a0fd`): sprawdzacz na wszystkich sekcjach — 1725 nazw, 0 braków;
+test dymny 39/0, w tym dziewięć mutacji README, z których każda została wykryta. Pierwszy
+przebieg zatrzymał się na czerwonym teście Vitest (pułapka EN), drugi — na braku aplikatora
+łatek na pulpicie (plik przeniesiony do innego folderu; wykonawca ma ścieżkę pulpitu na
+sztywno, zasada 5 z promptu Etapu 10).
+
+---
+
+## Blok B — porządki: `.env.example`, `APP_NAME`, `age_rating`, `ExampleTest`
+
+### Decyzje
+
+**378. `.env.example` opisuje działający stos z `docker-compose.yml`, a nie szablon Laravela.**
+PostgreSQL (`postgres`, baza i użytkownik `cinema`), Redis dla cache, sesji i kolejki, Mailpit
+jako SMTP, `REDIS_QUEUE_RETRY_AFTER=90`. Puste zostają tylko sekrety generowane lokalnie
+(`APP_KEY`, `TICKET_QR_KEY`, klucze Reverba, Stripe'a i Firebase) — kroki `sed` w README
+dalej trafiają w te same linie. Usunięte: blok zdublowanych ustawień domenowych, martwe
+<code>SCREENING_CLEANUP_BUFFER</code> (kod czyta `SCREENING_CLEANUP_BUFFER_MINUTES`),
+<code>VITE_APP_NAME</code>, klucze `AWS_*` i `MEMCACHED_HOST` (szablon Laravela; dysku S3 ani
+memcached nie używamy). `DB_PASSWORD=secret` stoi jawnie, bo ta sama wartość jest jawnie
+w `docker-compose.yml` i dotyczy tylko lokalnego kontenera; hasła produkcyjne — blok D.
+Test dymny sprawdza nie tekst pliku, tylko to, że **wartości działają**: skrypt w kontenerze
+`php` łączy się nimi z bazą, Redisem, Mailpitem i Reverbem, a te same połączenia z wartościami
+sprzed bloku muszą się nie udać.
+
+**379. `APP_NAME=Kino` zamiast trzech jawnych prefiksów.** Laravel wylicza z nazwy prefiksy
+kluczy w Redisie (`kino-database-`, `kino-cache-`) i nazwę ciasteczka sesji (`kino-session`).
+Odrzucone: `REDIS_PREFIX`, `CACHE_PREFIX` i `SESSION_COOKIE` ustawione osobno — trzy zmienne
+do utrzymania w zgodzie zamiast jednej. Koszt zmiany w istniejącym środowisku: zadania
+czekające w kolejce pod starym prefiksem nie wykonają się, a administratorzy zalogują się
+ponownie — dlatego `.env` Andrzeja zmieniamy świadomie, a nie przy okazji. Wzorzec skanu
+sekretów wykonawcy nie zależy już od nazwy aplikacji (pułapka EO).
+
+**380. Fabryka filmów bierze kategorie wiekowe z `MovieAdminService::AGE_RATINGS`** — tej samej
+listy, którą waliduje panel. Fabryka losowała amerykańskie `G`, `13+`, a seeder i panel używają
+polskich (`B/O`, `12`, `15`…); dane testowe nie mogą mieć wartości, których aplikacja nie zna.
+Jedyny test z `13+` (`TicketPdfRendererTest`) dostał `12`.
+
+**381. `ExampleTest` usunięte (oba), a wykonawca umie usuwać pliki.** Pole `DELETE` w manifeście:
+tylko plik śledzony przez gita, w dozwolonej ścieżce i o sumie znanej paczce; w `GIT_STATUS`
+jako „ D”; `--cofnij` przywraca go z gita jak plik łatany. Generator paczek zamiast STOP przy
+usuniętym pliku buduje wpis `DELETE`. PHPUnit: 495 testów w 69 klasach.
+
+### Pułapki
+
+**EO. Reguła skanera sekretów zależała od nazwy aplikacji.** Objaw (wychwycony przy
+projektowaniu bloku, zanim zadziałał): po `APP_NAME=Kino` ciasteczko sesji panelu nazywa się
+`kino-session`, a wzorzec skanu w wykonawcy szukał dosłownie „laravel[-_]session=” (pułapka AX
+z Etapu 7). Zmiana jednej wartości konfiguracji wyłączyłaby po cichu jedną regułę
+bezpieczeństwa. Nauczka: regułę wykrywania opiera się na KSZTAŁCIE (dowolna nazwa
+`…-session=` z długą wartością), a nie na nazwie wyliczonej z konfiguracji — i sprawdza się ją
+na próbkach: nowa nazwa wykryta, stara wykryta, sama nazwa w zdaniu bez wartości — nie.
+
+**EP. „U mnie działa”, bo `.env` żyje własnym życiem.** Objaw: `.env.example` miał SQLite,
+bazodanową kolejkę i cache, `MAIL_MAILER=log` i ani jednego hosta z `docker-compose.yml`,
+a mimo to przez dziewięć etapów wszystko działało. Przyczyna: `.env` Andrzeja powstał z
+przykładu w Etapie 0 i był poprawiany ręcznie; przykład nie. Instrukcja „Uruchomienie od
+zera” kopiowała więc plik, z którym migracje nie przejdą (indeksy częściowe i `EXCLUDE` są
+tylko w PostgreSQL). Nauczka: plik przykładowy jest kodem, więc musi mieć test — tu sondę
+połączeń jego wartościami, a w CI (blok F) start środowiska wyłącznie z niego.

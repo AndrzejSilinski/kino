@@ -291,12 +291,9 @@ wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
 
 | Zestaw | Testów | Klas / plików | Uruchomienie |
 |---|---:|---|---|
-| PHPUnit | **497** | 71 klas | <code>docker compose exec php php artisan test</code> |
+| PHPUnit | **495** | 69 klas | <code>docker compose exec php php artisan test</code> |
 | Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
 | Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
-
-`ExampleTest` (po jednym w `tests/Unit` i `tests/Feature`) to przykłady ze szkieletu Laravela
-— do usunięcia w porządkach Etapu 10.
 
 W README tekst w odwróconych apostrofach (jak `SeatLockApiTest`) oznacza **nazwę z kodu**
 (klasę, metodę, trasę, zmienną, plik) i jest sprawdzany; <code>tak zapisane</code> fragmenty to przykłady, składnia SQL albo polecenia
@@ -1746,8 +1743,10 @@ uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
   powiadomieniem; źródłem prawdy będzie lista rezerwacji w panelu (Etap 7).
 - **Sonda wywołuje zdarzenia rezerwacji próbną wysyłką**, a nie prawdziwym
   checkoutem (ten tworzyłby płatność w Stripe) — przejścia pokrywają testy.
-- **`.env.example` ma `CACHE_STORE=database`**, a środowisko używa Redisa;
-  bez `APP_NAME` klucze w Redisie mają prefiks <code>laravel-…</code>. Porządek w Etapie 10.
+- ~~**`.env.example` ma <code>CACHE_STORE=database</code>**, a środowisko używa Redisa;
+  bez `APP_NAME` klucze w Redisie mają prefiks <code>laravel-…</code>.~~ — **rozwiązane w Etapie 10**
+  (blok B): `.env.example` opisuje cały stos z `docker-compose.yml`, a `APP_NAME=Kino` daje
+  prefiksy <code>kino-database-</code> i <code>kino-cache-</code>.
 
 ---
 
@@ -2270,11 +2269,12 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
 - **Osierocone pliki plakatów** po awarii między zapisem pliku a COMMIT — nieszkodliwe,
   sprzątanie komendą w Etapie 10.
 - **Data publikacji artykułów w jednej strefie sieci** (Europe/Warsaw).
-- **Porządki na Etap 10:** zdublowane wpisy w `.env.example` (`SCREENING_ADS_MINUTES`,
-  martwe `SCREENING_CLEANUP_BUFFER`), `CACHE_STORE` i `SESSION_DRIVER` z wartościami
-  `database` w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie), zaufane proxy
-  przy TLS, niespójne wartości `age_rating` w `MovieFactory`, skrypt uruchamiający sondę
-  WebSocket i skrypt zgodności README w CI.
+- **Porządki na Etap 10:** ~~zdublowane wpisy w `.env.example` (`SCREENING_ADS_MINUTES`,
+  martwe <code>SCREENING_CLEANUP_BUFFER</code>), `CACHE_STORE` i `SESSION_DRIVER` z wartościami
+  <code>database</code> w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie)~~ i ~~niespójne
+  wartości `age_rating` w `MovieFactory`~~ — **rozwiązane w Etapie 10** (blok B); zaufane proxy
+  przy TLS (blok E), skrypt uruchamiający sondę WebSocket (blok B2) i sprawdzacz zgodności
+  README w CI (blok F; od bloku A2 uruchamia go wykonawca paczek po każdym bloku).
 
 ---
 
