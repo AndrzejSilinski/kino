@@ -335,3 +335,61 @@ przykładu w Etapie 0 i był poprawiany ręcznie; przykład nie. Instrukcja „U
 zera” kopiowała więc plik, z którym migracje nie przejdą (indeksy częściowe i `EXCLUDE` są
 tylko w PostgreSQL). Nauczka: plik przykładowy jest kodem, więc musi mieć test — tu sondę
 połączeń jego wartościami, a w CI (blok F) start środowiska wyłącznie z niego.
+
+Wynik bloku B (commit `8cc9c7f`): test dymny 41/0 — w tym sonda połączeń wartościami z
+`.env.example` (baza, Redis, poczta, Reverb: 4/4 OK; wartości sprzed bloku: 3 z 4 BŁĄD),
+PHP 495, front 210, Flutter 315, README 0 braków.
+
+---
+
+## Blok B2 — sonda WebSocket jednym poleceniem
+
+### Decyzje
+
+**382. `bash tools/realtime-probe/run.sh` — sonda z Etapu 6 bez tinkera i bez ręcznych kroków.**
+Dane przygotowuje `tools/realtime-probe/sonda.php` (seans w sprzedaży zaczynający się za więcej
+niż godzinę, rezerwacja techniczna klientki `anna@cinema.test`, trzy tokeny Sanctum), a `run.sh`
+blokuje i zwalnia miejsce przez API w chwilach, które sonda sama ogłasza („PROBE READY”,
+„PROBE RECONNECTED”), po czym wysyła zdarzenie rezerwacji przez prawdziwy `RealtimeNotifier`.
+Szczegóły, które mają znaczenie:
+- skrypt PHP idzie do kontenera `php` na standardowe wejście, bo kontener widzi tylko `backend/`;
+- tokeny trafiają z wyjścia `sonda.php prepare` prosto do pliku z prawami 600 w katalogu 700,
+  do sondy — przez montowanie tylko do odczytu, do `curl` — przez plik nagłówków (`-H @plik`),
+  a nie argument, który widać w liście procesów; na ekran nie trafiają nigdzie;
+- rezerwacja techniczna jest od razu ANULOWANA: bez miejsc, bez płatności, poza zasięgiem
+  sprzątania blokad; zdarzenie ma prawdziwy status tej rezerwacji;
+- sprzątanie zawsze (`trap … EXIT`), a dane sondy rozpoznaje po stałej nazwie tokenów i powodzie
+  anulowania, nie po identyfikatorach z pliku — działa także po przebiegu przerwanym w połowie.
+Odrzucone: komenda artisana w aplikacji (narzędzie testowe w kodzie produkcyjnym) i
+`tinker --execute` (cytowanie wielolinijkowego kodu w powłoce i brak czytelnego kodu wyjścia).
+
+**383. Kontrola ujemna wbudowana w narzędzie: `PROBE_BEZ_KROKOW=1`.** Sonda bez blokady i bez
+zdarzenia MUSI skończyć się FAIL i kodem 1 — test dymny sprawdza oba przebiegi. Zmierzone przed
+wysłaniem paczki na prawdziwym Reverbie: przebieg pełny 15/15 PASS (kod 0), bez kroków 7/15
+(kod 1), po obu zero tokenów i zero rezerwacji technicznych w bazie.
+
+**384. Sprawdzacz README widzi też pliki nowe, jeszcze niedodane do gita** (`git ls-files
+--cached --others --exclude-standard`). Wykonawca sprawdza README przed commitem, więc blok,
+który dodaje plik i od razu opisuje go w README, dostawał BRAK. Pliki ignorowane nadal się nie
+liczą (pułapka EL zostaje zamknięta).
+
+**385. Środowisko do sprawdzania paczek po mojej stronie: PostgreSQL 16, Redis, PHP 8.4,
+Node 22 i gitleaks 8.30.1 w kontenerze Claude'a, na lustrze repozytorium z `git bundle`.**
+Pełny zestaw PHPUnit (495), Vitest, sprawdzacz README i sonda z prawdziwym Reverbem przechodzą
+u mnie, zanim paczka trafi na pulpit. Nie zastępuje to przebiegu u Andrzeja — obraz Dockera,
+Flutter i sieć Dockera są tylko tam — ale błędy logiki wychodzą teraz przed wysłaniem, a nie
+po nim (pułapka EQ).
+
+### Pułapki
+
+**EQ. Funkcja globalna `event()` w skrypcie zasłoniła pomocnika Laravela.** Objaw: sonda na
+lokalnym Reverbie — 12/15; blokady i zwolnienia miejsc dochodziły do klientów, ale zdarzenie
+rezerwacji nie: w logu „Nie udało się rozgłosić zdarzenia”, wyjątek `TypeError`. To samo
+zdarzenie wysłane ręcznie przechodziło. Przyczyna: `sonda.php` miał funkcję `event(int $id)`.
+PHP deklaruje funkcje globalne przy KOMPILACJI skryptu — zanim wykona się `require` autoloadera
+— a Laravel deklaruje swój `event()` tylko „jeśli jeszcze nie istnieje”. `RealtimeNotifier`
+wołał więc funkcję sondy z obiektem zdarzenia. Nauczka: skrypt, który ładuje framework, nie
+może mieć funkcji globalnych o nazwach pomocników frameworka (`event`, `app`, `config`,
+`report`…) — prefiks albo klasa; i druga, szersza: narzędzie testowe, które po cichu robi co
+innego niż kod produkcyjny, daje wynik o niczym. Wyszło przed wysłaniem paczki tylko dlatego,
+że sonda miała po mojej stronie prawdziwy Reverb (decyzja 385).

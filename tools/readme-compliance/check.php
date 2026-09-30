@@ -178,8 +178,11 @@ $externalClass = static function (string $class) use (&$vendorIndex): bool {
     return false;
 };
 
-// Etap 10, blok A2: pliki śledzone przez gita — jedyna lista plików, która jest taka sama u mnie i w CI.
-$tracked = array_flip(array_filter(explode("\n", (string) shell_exec('git ls-files 2>/dev/null'))));
+// Etap 10, blok A2: pliki repozytorium — jedyna lista plików, która jest taka sama u mnie i w CI.
+// Blok B2: śledzone ORAZ nowe, jeszcze niedodane pliki nieignorowane (--others --exclude-standard):
+// wykonawca sprawdza README PRZED commitem, więc plik dodawany w tym samym bloku nie jest jeszcze
+// śledzony. Pliki ignorowane (np. dowiązanie public/storage, pułapka EL) nadal się nie liczą.
+$tracked = array_flip(array_filter(explode("\n", (string) shell_exec('git ls-files --cached --others --exclude-standard 2>/dev/null'))));
 if ($tracked === []) {
     echo "STOP: pusta lista `git ls-files` (brak gita albo repozytorium w kontenerze?) — ścieżek nie da się sprawdzić\n", "EXIT: 1\n";
     exit(1);

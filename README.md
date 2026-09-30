@@ -1718,8 +1718,11 @@ Koszt awarii Reverba przed i po bezpieczniku:
   identyczny wpis feedu na obu kanałach, a anonim i obcy klient dostają
   `403 CHANNEL_FORBIDDEN` na cudzej rezerwacji i feedach.
 
-Sonda potrzebuje danych i tokenów przygotowanych w tinkerze; skrypt
-uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
+~~Sonda potrzebuje danych i tokenów przygotowanych w tinkerze~~ — **od Etapu 10 (blok B2)**
+uruchamia ją jedno polecenie, lokalnie i w CI: <code>bash tools/realtime-probe/run.sh</code>.
+Dane (seans w sprzedaży, anulowaną rezerwację techniczną, tokeny Sanctum) przygotowuje
+i po przebiegu usuwa `tools/realtime-probe/sonda.php`, a `tools/realtime-probe/run.sh`
+blokuje i zwalnia miejsce przez API w chwilach, które sonda sama sygnalizuje.
 
 ### Etap 6 — znane ograniczenia i co dalej
 
