@@ -447,3 +447,30 @@ przeniesiony tam, gdzie naprawdę zapada decyzja; mutacja TEJ linii (bez zamkni�
 rozliczenia) test wywraca. Nauczka: kod obronny sprawdza się mutacją — jeśli po usunięciu
 warunku żaden test nie pada, to albo brakuje testu, albo warunek jest zbędny, a zbędny
 warunek wprowadza czytelnika w błąd co do tego, gdzie jest zabezpieczenie.
+
+Wynik bloku C (commit `8ab4357`): PHP 501 (w tym 6 nowych), test dymny 17/0 — podpisane
+`refund.failed` przeszło przez nginx, podpis i adapter na żywym stosie (HTTP 200,
+`unknown_booking`, płatność w dzienniku zdarzeń), migracja bazy deweloperskiej wykonana.
+
+---
+
+## Blok C2 — sprzątanie osieroconych plakatów
+
+### Decyzje
+
+**391. `cinema:posters:prune` usuwa plik tylko przy trzech warunkach naraz:** nazwa w kształcie,
+który nadaje aplikacja (`posters/<ulid>.jpg`), brak filmu wskazującego plik i wiek ponad 24 godziny.
+Okno 24 godzin, a nie sekundy: plik zapisany przed trwającą transakcją nie ma jeszcze wiersza,
+a koszt pomyłki (utracony plakat) jest nieporównanie wyższy niż koszt sieroty leżącej do jutra.
+`--older-than` nie schodzi poniżej godziny. Logika w `MovieAdminService::pruneOrphanPosters()`,
+komenda jest cienka, jak pozostałe komendy harmonogramu; w harmonogramie codziennie o 3:45.
+
+**392. Testy trzymają na dysku KOMPLET rodzajów plików naraz** (używany, stara sierota, świeża
+sierota, obca nazwa), a każdy z trzech warunków i dolna granica okna przeszły test mutacyjny:
+po usunięciu dowolnego z nich test pada. Samo „sierota znika” przepuściłoby komendę, która
+kasuje cały katalog.
+
+**393. Test dymny sprawdza bezpieczeństwo na PRAWDZIWYCH plakatach Andrzeja**, niezależną
+miarą: najpierw `--dry-run` i porównanie jego listy z bazą (żaden wskazany plik na liście),
+potem prawdziwy przebieg i sprawdzenie, że plik każdego filmu z plakatem nadal istnieje.
+Do katalogu trafia na czas testu jedna podstawiona, postarzona sierota — i ona ma zniknąć.

@@ -44,6 +44,9 @@ final class MovieAdminService
 
     public const POSTER_DIRECTORY = 'posters';
 
+    /** Okno bezpieczeństwa sprzątania sierot (godziny) — patrz pruneOrphanPosters(). */
+    public const ORPHAN_GRACE_HOURS = 24;
+
     public function __construct(
         private readonly CatalogCache $catalog,
         private readonly PosterImageProcessor $posters,
@@ -183,6 +186,49 @@ final class MovieAdminService
         }
 
         return $path;
+    }
+
+    /**
+     * Sprzątanie osieroconych plakatów (Etap 10, blok C2; zapowiedź z Etapu 7).
+     *
+     * Sierota powstaje, gdy proces padnie między zapisem pliku a COMMIT (wyjątek sprząta sam,
+     * zabicie procesu — nie) albo gdy usunięcie starego pliku po COMMIT się nie uda. Usuwamy
+     * plik tylko wtedy, gdy JEDNOCZEŚNIE:
+     *  - nazwa ma kształt, który nadaje storePoster() (posters/<ulid>.jpg) — cudzych plików
+     *    w katalogu nie ruszamy nawet przez pomyłkę w konfiguracji,
+     *  - żaden film nie wskazuje go w poster_path,
+     *  - jest starszy niż $olderThanHours: plik zapisany przed trwającą właśnie transakcją
+     *    jeszcze nie ma wiersza, który go wskazuje — okno bezpieczeństwa to kilka godzin,
+     *    a nie milisekundy, bo koszt pomyłki (utracony plakat) jest dużo wyższy niż koszt
+     *    zostawienia sieroty do jutra.
+     *
+     * @return array{checked: int, referenced: int, fresh: int, foreign: int, orphans: list<string>, deleted: int}
+     */
+    public function pruneOrphanPosters(int $olderThanHours = self::ORPHAN_GRACE_HOURS, bool $dryRun = false): array
+    {
+        $disk = Storage::disk('public');
+        $referenced = array_flip(Movie::query()->whereNotNull('poster_path')->pluck('poster_path')->all());
+        $cutoff = CarbonImmutable::now()->subHours(max(1, $olderThanHours))->getTimestamp();
+        $result = ['checked' => 0, 'referenced' => 0, 'fresh' => 0, 'foreign' => 0, 'orphans' => [], 'deleted' => 0];
+
+        foreach ($disk->files(self::POSTER_DIRECTORY) as $path) {
+            $result['checked']++;
+
+            if (preg_match('#\A'.self::POSTER_DIRECTORY.'/[0-9a-z]{26}\.jpg\z#', $path) !== 1) {
+                $result['foreign']++;
+            } elseif (isset($referenced[$path])) {
+                $result['referenced']++;
+            } elseif ($disk->lastModified($path) > $cutoff) {
+                $result['fresh']++;
+            } else {
+                $result['orphans'][] = $path;
+                if (! $dryRun && $disk->delete($path)) {
+                    $result['deleted']++;
+                }
+            }
+        }
+
+        return $result;
     }
 
     /**

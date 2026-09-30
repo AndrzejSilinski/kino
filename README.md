@@ -291,7 +291,7 @@ wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
 
 | Zestaw | Testów | Klas / plików | Uruchomienie |
 |---|---:|---|---|
-| PHPUnit | **501** | 70 klas | <code>docker compose exec php php artisan test</code> |
+| PHPUnit | **505** | 71 klas | <code>docker compose exec php php artisan test</code> |
 | Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
 | Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
 
@@ -2274,8 +2274,11 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
   polsku, a zwrotu NIE ponawiamy automatycznie — zamknięta albo zgubiona karta odrzuci każdą
   kolejną próbę. Testy: `RefundFailedWebhookTest`. Na serwerze endpoint webhooka w panelu Stripe'a
   musi mieć zaznaczone zdarzenie `refund.failed` (<code>stripe listen</code> przekazuje wszystkie).
-- **Osierocone pliki plakatów** po awarii między zapisem pliku a COMMIT — nieszkodliwe,
-  sprzątanie komendą w Etapie 10.
+- ~~**Osierocone pliki plakatów** po awarii między zapisem pliku a COMMIT — nieszkodliwe,
+  sprzątanie komendą w Etapie 10~~ — **rozwiązane w Etapie 10** (blok C2): komenda
+  `cinema:posters:prune` codziennie o 3:45 usuwa plik `posters/<ulid>.jpg`, którego nie wskazuje
+  żaden film i który jest starszy niż 24 godziny (zapis w toku nie ma jeszcze wiersza w bazie);
+  plików o innych nazwach nie rusza, `--dry-run` tylko wypisuje. Testy: `PruneOrphanPostersCommandTest`.
 - **Data publikacji artykułów w jednej strefie sieci** (Europe/Warsaw).
 - **Porządki na Etap 10:** ~~zdublowane wpisy w `.env.example` (`SCREENING_ADS_MINUTES`,
   martwe <code>SCREENING_CLEANUP_BUFFER</code>), `CACHE_STORE` i `SESSION_DRIVER` z wartościami

@@ -131,3 +131,16 @@ Schedule::command('sanctum:prune-expired --hours=24')
     ->onOneServer()
     ->runInBackground()
     ->appendOutputTo($output);
+
+/*
+ * Sprzątanie osieroconych plakatów (Etap 10, blok C2).
+ *
+ * dailyAt('03:45') — sierota nikomu nie szkodzi poza miejscem na dysku, więc raz na dobę,
+ * po sprzątaniu tokenów. Komenda sama pomija pliki młodsze niż 24 godziny (zapis w toku).
+ */
+Schedule::command('cinema:posters:prune')
+    ->dailyAt('03:45')
+    ->withoutOverlapping(30)
+    ->onOneServer()
+    ->runInBackground()
+    ->appendOutputTo($output);
