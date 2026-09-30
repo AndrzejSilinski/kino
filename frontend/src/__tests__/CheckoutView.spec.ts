@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter } from 'vue-router';
 import { ApiError } from '@/api/errors';
 import { booking, checkoutResult, pendingCart, REFERENCE } from './fixtures/checkout';
 import { cartOf, mapSeat, snapshot } from './fixtures/seats';
+import { bezWidokow } from './fixtures/router';
 
 const seats = vi.hoisted(() => ({ seatMap: vi.fn(), cart: vi.fn(), lock: vi.fn(), release: vi.fn(), releaseAll: vi.fn() }));
 const bookings = vi.hoisted(() => ({ checkout: vi.fn(), abandonPayment: vi.fn(), show: vi.fn() }));
@@ -22,7 +23,7 @@ const A1 = 891;
 const mine = () => snapshot([mapSeat({ position: { x: 1, y: 1 }, status: 'held_by_you' }), mapSeat({ position: { x: 2, y: 1 } })]);
 
 async function mountView() {
-  const router = createRouter({ history: createMemoryHistory(), routes });
+  const router = createRouter({ history: createMemoryHistory(), routes: bezWidokow(routes) });
   await router.push('/screenings/334/checkout');
   const wrapper = mount(CheckoutView, { global: { plugins: [router] } });
   await flushPromises();

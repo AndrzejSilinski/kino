@@ -149,3 +149,128 @@ dałby zielone światło skanerowi, który niczego nie widzi. Wyłapała to atra
 uruchamiająca prawdziwą binarkę gitleaks 8.30.1 na lustrze repozytorium. Nauczka: kontrolę
 dodatnią ustawia się JAWNIE (osobny plik z samymi regułami domyślnymi), a nie przez brak
 parametru — domyślne zachowanie narzędzia zależy od stanu katalogu, który właśnie zmieniamy.
+
+---
+
+## Blok A — wykonawca paczek i gitleaks (commit `22f9a5b`)
+
+Raport: front 210/210 (`npm audit`: 0 podatności), Flutter 315/315, PHP 497, test dymny 23/0,
+sprawdzacz README dla Etapu 9 — 0 braków, gitleaks na zmianach bloku — czysto. Etap 8 miał
+przed blokiem 25 braków Vitest, po bloku 0.
+
+**Obserwacja otwarta (do bloku D):** przed pierwszym przebiegiem bloku A wszystkie kontenery
+z obrazem aplikacji (`php`, `worker`, `scheduler`, `reverb`) i `nginx` były zatrzymane z kodem
+**127** („nie znaleziono polecenia”), wszystkie w tej samej chwili — przy starcie Dockera.
+Postgres, Redis i Mailpit działały. W logach nic poza zwykłymi wpisami sprzed zatrzymania.
+Przyczyny nie znamy; `docker compose down` i `up` przywróciły działanie. W bloku D, który
+przebudowuje obraz i dodaje entrypoint, odtworzymy to celowo (restart Docker Desktop) i
+sprawdzimy, co wstaje samo — zamiast zgadywać teraz.
+
+---
+
+## Blok A2 — sprawdzacz README na wszystkich sekcjach
+
+### Decyzje
+
+**370. Sprawdzacz bez argumentu sprawdza wszystkie sekcje „## Etap N” i żywą tabelę testów;
+wykonawca i CI wołają go właśnie tak (`README_ETAPY="wszystkie"`).** Argument z nazwą sekcji
+zostaje do diagnostyki. Minimum sprawdzonych nazw: 20 w każdej sekcji etapu i 100 łącznie.
+Dotychczasowe 100 na wywołanie zatrzymywało poprawną sekcję Etapu 4 (49 nazw), a samo
+minimum łączne przepuściłoby sekcję, z której przez błąd parsera nie wyszła ani jedna nazwa —
+dlatego oba progi (strażnik pułapki AW na dwóch poziomach).
+
+**371. Tabele testów w sekcjach etapów to stan na koniec etapu.** Sprawdzamy, że każda
+wymieniona klasa i każdy plik nadal istnieją i że wiersze (z wierszem „Etapy 1–k”) sumują się
+do „Razem”. Liczb nie porównujemy z dzisiejszym kodem. Odrzucone: podciągnięcie liczb do
+dzisiejszych (tabela Etapu 3 przestałaby mówić, co dał Etap 3) oraz rezygnacja ze sprawdzania
+tabel historycznych (klasa usunięta albo przemianowana zostałaby w README na zawsze).
+
+**372. Żywa tabela: sumy na zestaw, liczba klas i plików oraz POKRYCIE, zamiast jednej tabeli
+ze wszystkimi klasami.** Plan zakładał tabelę ok. 170 wierszy (71 klas PHP, 53 pliki Vitest,
+48 plików Fluttera) — dublowałaby tabele etapów słowo w słowo. Ta sama gwarancja taniej: każda
+zmiana liczby testów w dowolnej klasie zmienia sumę zestawu, a warunek pokrycia („każda klasa
+i każdy plik testów występuje w README”) nie przepuści nowego testu bez słowa opisu. Pokrycie
+od razu znalazło lukę: `ScreeningCancellationServiceTest` z Etapu 9 nie był w README nigdzie
+(decyzja 376).
+
+**373. `Backticki` znaczą nazwę z kodu i są sprawdzane; `<code>…</code>` znaczy przykład,
+składnię SQL, polecenie powłoki albo nazwę celowo nieistniejącą i sprawdzany nie jest.**
+Przeniesionych do `<code>`: 63 różne fragmenty z etapów 2–7 (np. `UPDATE … RETURNING`,
+`docker compose exec`, `maxmemory`, „Bez `tickets_ready`”). Na GitHubie oba zapisy wyglądają
+tak samo; różnica jest dla czytającego źródło i dla sprawdzacza. Odrzucone:
+- rozpoznawanie SQL i poleceń po wyglądzie — heurystyka, która przepuści `SELECT`, przepuści
+  też literówkę w nazwie kolumny obok,
+- lista wyjątków w sprawdzaczu — odklejona od miejsca w README, rośnie bez kontroli.
+Test dymny sprawdza obie strony: nieistniejąca nazwa w `<code>` jest pomijana, a TA SAMA nazwa
+w backtickach — zgłaszana.
+
+**374. Nazwy spoza repozytorium są sprawdzane, a nie przepuszczane.** Klasy wbudowane PHP
+(`TypeError`, `\Throwable`) przez refleksję, klasy frameworka i bibliotek (`FormRequest`,
+`RefreshDatabase`, `Pusher\ApiErrorException`) w `backend/vendor`: indeks samych nazw plików
+(PSR-4: plik nazywa się jak klasa) i odczyt tylko pasujących plików, z kontrolą przestrzeni
+nazw, gdy ją podano. Do tego: przypadki enumów (`UserRole::Customer` był zgłaszany, bo
+sprawdzacz szukał tylko `function` i `const`), metody wołane przez `::` i `->` (`afterCommit`
+w `DB::afterCommit`), a w korpusie `Dockerfile` (pakiety obrazu) i `composer.lock` (nazwy
+pakietów, np. `guzzlehttp/psr7`).
+
+**375. Ścieżki sprawdzamy wobec `git ls-files`, z rozwinięciem `{a,b}` jak w powłoce i z
+domyślnym `.php`.** Pusta lista plików to STOP, nie „wszystko przeszło”. Pułapka EL.
+
+**376. Prawdziwy dryf poprawiony w README (i w jednym miejscu w `.env.example`), nie w
+sprawdzaczu.** Trasa planu sali z parametrem `{id}` zamiast `{screening}` i bez prefiksu;
+`Cache::add()` w opisie bezpiecznika, choć kod woła `->add()` wstrzykniętego repozytorium
+cache; `throw => false` zamiast `'throw' => false`; literówka „Dartcie”. Brakująca tabela
+testów PHP Etapu 9 (cztery klasy, stan na koniec etapu). `MAIL_FROM_ADDRESS` i
+`MAIL_FROM_NAME` w `.env.example` dostały wartości, które README Etapu 5 podaje jako domyślne.
+Pozostały rozjazd `.env.example` z README i z działającym `.env` (`QUEUE_CONNECTION`,
+`CACHE_STORE`, `DB_*`…) to blok B — sprawdzacz go nie widzi, bo porównuje nazwy, a wartości
+łapie tylko wtedy, gdy są unikalnym napisem (`bilety@cinema.test` tak, `redis` nie).
+`ExampleTest` (dwa przykłady ze szkieletu Laravela) opisany w żywej tabeli jako do usunięcia
+w bloku B.
+
+### Pułapki
+
+**EL. Kontrola przez `file_exists` daje inny wynik na każdej maszynie.** Objaw: Etap 7 u
+Andrzeja przechodził, a u mnie — na lustrze repozytorium z `git bundle` — zgłaszał
+`BRAK ścieżka public/storage`. Przyczyna: `backend/public/storage` to dowiązanie tworzone
+ręcznie według instrukcji uruchomienia, poza gitem; sprawdzacz pytał system plików, a nie
+repozytorium. W CI (świeży klon) kontrola padłaby, a u autora przechodziła. Nauczka ta sama co
+w EF, tylko dla narzędzia zamiast testu: kontrola, która ma dawać ten sam wynik u mnie i w
+CI, może patrzeć wyłącznie na to, co jest w repozytorium — lokalne artefakty uruchomienia to
+dane, których nie ma nikt poza mną.
+
+**EM. Parser, który po cichu pomija nierozpoznany wiersz, zamienia brak dopasowania w brak
+problemu.** Objaw: tabela Etapu 5 „sumowała się” według sprawdzacza do 123, a „Razem” mówiło
+141 — wyglądało to na błąd README. Przyczyna: wzorzec wiersza wymagał `|` zaraz po nazwie
+klasy, więc wiersze z dopiskiem, np. `RetryPolicyTest` (Unit), nie były ani sumowane, ani
+sprawdzane — od Etapu 7, bez żadnego komunikatu. Nauczka: przy parsowaniu tabel suma kontrolna
+(wiersze = „Razem”) jest tanią siatką na każdy pominięty wiersz — dlatego zostaje także w
+tabelach historycznych. Ta sama siatka zadziałała przy pisaniu testu dymnego tego bloku:
+mutacja zmieniła nazwę klasy tak, że przestała kończyć się na „Test”, wiersz wypadł z
+parsowania — i wykryła to właśnie niezgodna suma.
+
+**377. Testy „komponent przechodzi na trasę X” dostają trasy z pustymi widokami
+(`frontend/src/__tests__/fixtures/router.ts`, funkcja `bezWidokow`).** Sprawdzają, DOKĄD
+prowadzi nawigacja; ładowanie widoku docelowego nie jest ich przedmiotem, a przy prawdziwych
+trasach było jedynym, co zależało od czasu. Ścieżki, nazwy, `meta`, `beforeEnter` i trasy
+potomne zostają prawdziwe. Zmierzone w teście `CheckoutView.spec.ts`: nawigacja z prawdziwymi,
+leniwymi widokami trwała 10–235 ms (pełny zestaw przy czterech procesach obciążających CPU),
+z pustymi — 0–1 ms. Odrzucone: dłuższy limit `vi.waitFor` (przesuwa próg, a nie usuwa
+zależności od czasu) i wstępne `import()` widoku w teście (ładowanie liczy się wtedy do limitu
+całego testu — ten sam problem piętro wyżej). Zmienione trzy pliki, w których `vi.waitFor`
+czeka na trasę: `CheckoutView.spec.ts` (dwa przypadki), `LoginView.spec.ts`,
+`ScreeningSeatsCheckout.spec.ts`; test dymny pilnuje, żeby nowy test tego rodzaju też z tego
+korzystał.
+
+**EN. Test, który czeka na import() z domyślnym limitem 1 s, jest pomiarem obciążenia maszyny.**
+Objaw: pierwszy przebieg bloku A2 zatrzymał się na froncie — `CheckoutView.spec.ts`,
+„rezygnacja z płatności wraca do planu sali”: trasa wciąż `checkout` zamiast `screening-seats`.
+Blok A2 nie dotyka frontu ani jedną linią; ten sam zestaw przeszedł 210/210 w bloku A
+godzinę wcześniej. Przyczyna (szukana OBOK zmiany, według nauczki z Etapu 9): trasa ładuje
+widok planu sali leniwie, a `vi.waitFor` domyślnie czeka 1000 ms. Pierwsze ładowanie dużego
+widoku w danym wątku Vitesta zajmowało zmierzone 10–235 ms, a przebieg u Andrzeja był wyraźnie
+wolniejszy niż w bloku A (36 s zamiast 31 s) — przy obciążonym dysku lub procesorze próg 1 s
+został przekroczony. Nauczka: w teście oczekiwanie z limitem czasu jest w porządku tylko
+wtedy, gdy czekamy na coś, co z definicji trwa krótko; gdy po drodze jest ładowanie kodu,
+sieć albo dysk, test mierzy maszynę, a nie aplikację — i w CI, na współdzielonych
+maszynach, taki test „czasem pada”, czyli uczy ignorować czerwony wynik.

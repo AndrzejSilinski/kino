@@ -183,7 +183,7 @@ erDiagram
 | `seat_locks` | tymczasowa blokada miejsca | **`UNIQUE (screening_id, seat_id) WHERE released_at IS NULL`** |
 | `screening_seat_versions` | licznik wersji stanu miejsc per seans (Etap 6) | klucz główny = `screening_id`, CHECK `version > 0` |
 | `bookings` | rezerwacja: `reference` (ULID), status, kwota, PaymentIntent, znaczniki powiadomień (od Etapu 8 także `payment_push_sent_at`), anulowanie (powód, kto) i rozliczenie zwrotu (`refund_requested_at`, `refund_completed_at`) | CHECK statusu i `bookings_refund_completed_after_request`, `stripe_payment_intent_id` UNIQUE, indeksy częściowe `bookings_confirmation_pending`, `bookings_refund_pending`, `bookings_paid_at` |
-| `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`**, `code` UNIQUE |
+| `tickets` | bilet: `code` (UUID v4), cena, status, `validated_at`, `validated_by_user_id` | **<code>UNIQUE (screening_id, seat_id) WHERE status &lt;&gt; 'cancelled'</code>**, `code` UNIQUE |
 | `users` | klient, obsługa kina, administrator; od Etapu 8 avatar (`avatar_path`), zgoda na push (`push_consent_at`) i przypomnienia (`screening_reminders`) | CHECK `(role = 'staff') = (cinema_id IS NOT NULL)` |
 | `push_devices` | urządzenie z tokenem FCM (Etap 8): konto, sesja, platforma, ostatnie użycie | `public_id` i `token` UNIQUE, `personal_access_token_id` ON DELETE CASCADE, CHECK platformy |
 | `stripe_webhook_events` | dziennik przetworzonych zdarzeń Stripe'a (bez treści) | klucz główny = `event_id` |
@@ -218,7 +218,7 @@ erDiagram
    Żaden z nich nie jest sekwencyjny.
 10. **PostgreSQL** — indeksy częściowe i `EXCLUDE` (patrz wyżej).
 11. **Atomowość blokad na indeksie UNIQUE**, a nie na `SELECT ... FOR UPDATE`
-    ani Redis `SETNX` (szczegóły w Etapie 2).
+    ani Redis <code>SETNX</code> (szczegóły w Etapie 2).
 12. **Blokowanie all-or-nothing, `seat_id` sortowane rosnąco** — brak deadlocków
     i brak częściowo zajętych koszyków.
 13. **Serwisy rzucają wyjątki domenowe**, a nie zwracają odpowiedzi HTTP; jedno
@@ -274,6 +274,34 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 
 ---
 
+## Testy — stan obecny
+
+Jedyna tabela w README, której liczby odpowiadają **dzisiejszemu** kodowi. Tabele testów w sekcjach
+etapów to **stan na koniec etapu**: późniejsze etapy dopisywały testy do starszych klas (np.
+`SeatLockApiTest` miał na koniec Etapu 3 dziewięć testów, dziś ma dziesięć), więc tamte liczby
+opisują historię projektu, a nie obecny kod.
+
+Sprawdzacz zgodności README z kodem (`tools/readme-compliance/check.php`, uruchamiany przez
+wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
+
+- **ta tabela** — liczby testów i plików co do jednego, wobec PHPUnit i raportów Vitest i Fluttera;
+- **tabele etapów** — każda wymieniona klasa i każdy plik nadal istnieją, a wiersze sumują się
+  do „Razem”;
+- **pokrycie** — każda klasa i każdy plik testów musi być w README gdzieś wymieniony.
+
+| Zestaw | Testów | Klas / plików | Uruchomienie |
+|---|---:|---|---|
+| PHPUnit | **497** | 71 klas | <code>docker compose exec php php artisan test</code> |
+| Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
+| Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
+
+`ExampleTest` (po jednym w `tests/Unit` i `tests/Feature`) to przykłady ze szkieletu Laravela
+— do usunięcia w porządkach Etapu 10.
+
+W README tekst w odwróconych apostrofach (jak `SeatLockApiTest`) oznacza **nazwę z kodu**
+(klasę, metodę, trasę, zmienną, plik) i jest sprawdzany; <code>tak zapisane</code> fragmenty to przykłady, składnia SQL albo polecenia
+powłoki i sprawdzane nie są.
+
 ## Etap 2 — Blokowanie miejsc (współbieżność)
 
 Najważniejsza część zadania. Gdy przy premierze setki osób klikają ten sam fotel,
@@ -324,22 +352,22 @@ dostają pustkę i oba wstawiają. To phantom read i dokładnie ten błąd, któ
 szuka się w tym zadaniu.
 
 Żeby `FOR UPDATE` miało co blokować, potrzebna byłaby prefabrykowana tabela
-`screening_seats` ze stanem każdego fotela na każdym seansie — miliony wierszy
+<code>screening_seats</code> ze stanem każdego fotela na każdym seansie — miliony wierszy
 generowanych z góry dla seansów, na które nikt nie przyjdzie. Wariant alternatywny,
 blokowanie wiersza `screenings` jako mutexu na cały seans, serializuje całą salę:
 przy premierze 300 osób wybierających **różne** miejsca stoi w jednej kolejce.
 
-Poprawne warianty (`SERIALIZABLE` z pętlą retry na `40001`, `pg_advisory_xact_lock`)
+Poprawne warianty (<code>SERIALIZABLE</code> z pętlą retry na <code>40001</code>, `pg_advisory_xact_lock`)
 działają, ale są droższe i mniej czytelne, a ograniczenie unikalności i tak zostałoby
 jako pas bezpieczeństwa. Dwa mechanizmy zamiast jednego to koszt bez zysku.
 
-### Dlaczego nie Redis `SET NX PX`
+### Dlaczego nie Redis <code>SET NX PX</code>
 
-Redis kusi atomowym `SETNX` i wbudowanym TTL, ale wprowadza **drugie źródło prawdy**.
+Redis kusi atomowym <code>SETNX</code> i wbudowanym TTL, ale wprowadza **drugie źródło prawdy**.
 Bilety są w PostgreSQL; przy finalizacji płatności trzeba atomowo sprawdzić blokadę
 i wystawić bilet, czego nie da się objąć jedną transakcją obejmującą Redis i Postgres
 bez two-phase commit albo wzorca outbox — nakład nieproporcjonalny do zysku.
-Dochodzi trwałość (`appendfsync everysec` gubi do sekundy zapisów, failover na replikę
+Dochodzi trwałość (<code>appendfsync everysec</code> gubi do sekundy zapisów, failover na replikę
 gubi blokady) oraz brak śladu audytowego i raportowania.
 
 Redis jest w projekcie i zostanie użyty do cache repertuaru i kolejek, ale
@@ -349,7 +377,7 @@ sekundę byłby szybkim filtrem przed bazą — warstwą dodatkową, nie zamienn
 ### Pułapka: predykat indeksu nie może zawierać `now()`
 
 Naturalnym odruchem jest napisanie predykatu jako
-`WHERE released_at IS NULL AND expires_at > now()`. PostgreSQL na to nie pozwoli —
+<code>WHERE released_at IS NULL AND expires_at &gt; now()</code>. PostgreSQL na to nie pozwoli —
 w predykacie indeksu wolno używać wyłącznie funkcji `IMMUTABLE`, a `now()` jest
 `STABLE`. Konsekwencja jest fundamentalna dla całego projektu:
 
@@ -381,7 +409,7 @@ W transakcji:
    deadlock, który PostgreSQL rozstrzyga zabiciem jednej transakcji (`40P01`),
    czyli błędem 500 dla losowego użytkownika. Stała kolejność czyni deadlock
    **strukturalnie niemożliwym**.
-5. **Zwolnienie wygasłych blokad** na wybranych miejscach (`released_at = now()`).
+5. **Zwolnienie wygasłych blokad** na wybranych miejscach (<code>released_at = now()</code>).
    Gdy robią to dwie transakcje naraz, `UPDATE` zakłada lock na wierszu; druga
    po zwolnieniu locka ponownie ewaluuje `WHERE` na nowej wersji wiersza
    (EvalPlanQual), widzi wypełnione `released_at` i aktualizuje zero wierszy.
@@ -449,7 +477,7 @@ php artisan test --group=concurrency    # tylko test obowiązkowy
 
 Baza testowa `cinema_testing` powstaje **automatycznie** przy pierwszym
 `docker compose up` (skrypt `docker/postgres/init/01-create-test-database.sql`
-wykonywany przez obraz postgres z `/docker-entrypoint-initdb.d/`). Nie ma żadnego
+wykonywany przez obraz postgres z <code>/docker-entrypoint-initdb.d/</code>). Nie ma żadnego
 kroku ręcznego przed uruchomieniem testów.
 
 **Testy nie działają na SQLite — i nie mogą.** SQLite nie zna częściowych indeksów
@@ -460,7 +488,7 @@ a osobny test-bezpiecznik (`DatabaseEnvironmentTest`) pilnuje, żeby nikt nie ur
 czyszczących testów na bazie deweloperskiej.
 
 **Test obowiązkowy** uruchamia 20 procesów systemowych przez `proc_open()`.
-Nie użyto `pcntl_fork()`: procesy potomne dziedziczyłyby po rodzicu to samo
+Nie użyto <code>pcntl_fork()</code>: procesy potomne dziedziczyłyby po rodzicu to samo
 połączenie PDO i stan aplikacji, więc nie byłyby niezależnymi klientami bazy.
 Rozszerzenie `pcntl` jest w obrazie (potrzebuje go `queue:work` do limitu czasu
 zadań), ale do tego testu się nie nadaje. Każdy proces boot-uje Laravel od
@@ -502,7 +530,7 @@ SEAT_LOCK_SWEEP_BATCH=500            # rozmiar porcji przy czyszczeniu
   kontener `scheduler` uruchamia `schedule:work`, a `cinema:seat-locks:sweep`
   wykonuje się co minutę.
 - **Migracje nie uruchamiają się same** przy `docker compose up` — po starcie trzeba
-  wykonać `php artisan migrate --seed`. Docelowo trafi to do entrypointu kontenera PHP.
+  wykonać <code>php artisan migrate --seed</code>. Docelowo trafi to do entrypointu kontenera PHP.
 - ~~Brak broadcastu~~ — **rozwiązane w Etapie 6**: każda zmiana stanu miejsc
   podbija wersję w `SeatStateRecorder`, a po COMMIT wychodzi zdarzenie
   `seats.changed` na kanale seansu.
@@ -510,7 +538,7 @@ SEAT_LOCK_SWEEP_BATCH=500            # rozmiar porcji przy czyszczeniu
   może wystartować już po niej. Test pozostaje poprawny (asercje dotyczą wyniku,
   nie czasu), ale kontencja jest wtedy słabsza. Docelowo lepszym rozwiązaniem byłaby
   bariera na tabeli w bazie albo na Redisie.
-- **Gdybym miał więcej czasu**: dorzuciłbym test z `pg_sleep()` wstrzykniętym między
+- **Gdybym miał więcej czasu**: dorzuciłbym test z <code>pg_sleep()</code> wstrzykniętym między
   zwolnienie wygasłej blokady a INSERT, żeby udowodnić, że okno między tymi krokami
   jest faktycznie zamknięte transakcją, a nie tylko wąskie.
 
@@ -523,13 +551,13 @@ Flutter (Etap 9). Obsługuje pełną ścieżkę od wyboru kina po wycenę koszyk
 
 ### Wersjonowanie
 
-Wersja siedzi w ścieżce (`/api/v1/...`), nadawana przez `apiPrefix`
+Wersja siedzi w ścieżce (<code>/api/v1/...</code>), nadawana przez `apiPrefix`
 w `bootstrap/app.php`. Nie w nagłówku `Accept`, bo:
 
 - aplikacja Flutter w sklepie nie aktualizuje się na żądanie — musi istnieć
   możliwość zamrożenia `v1` i wystawienia `v2` obok,
 - prefiks nadaje framework, zanim wczyta plik tras, więc nie da się
-  przypadkiem dodać endpointu bez wersji (grupa `Route::prefix('v1')`
+  przypadkiem dodać endpointu bez wersji (grupa <code>Route::prefix('v1')</code>
   takiej gwarancji nie daje — wystarczy dopisać trasę pod klamrą),
 - daje się wywołać `curl`-em, zacache'ować po URL i pokazać w Scramble.
 
@@ -563,7 +591,7 @@ Sukces — zawsze koperta `data`; listy dokładają `links` i `meta` z paginacji
     { "data": [ ... ], "links": { ... }, "meta": { ... } }
 
 Koperta pozwala dołożyć `meta` do dowolnej odpowiedzi bez łamania kontraktu.
-Nie ma pola `success` — status HTTP już to mówi, a dublowanie stanu w dwóch
+Nie ma pola <code>success</code> — status HTTP już to mówi, a dublowanie stanu w dwóch
 miejscach kończy się tym, że któreś kłamie.
 
 Błąd — jeden kształt dla wszystkiego:
@@ -603,11 +631,11 @@ Błąd — jeden kształt dla wszystkiego:
 
 ### Konwencje pól
 
-- **Pieniądze**: `{ "amount": 3500, "currency": "PLN", "formatted": "35,00 zł" }`.
+- **Pieniądze**: <code>{ "amount": 3500, "currency": "PLN", "formatted": "35,00 zł" }</code>.
   `amount` to grosze jako `int`. Formatuje serwer, bo `Intl.NumberFormat`
-  w przeglądarce i `NumberFormat` w Dartcie dają dla `pl_PL` różne wyniki.
+  w przeglądarce i <code>NumberFormat</code> w Darcie dają dla `pl_PL` różne wyniki.
 - **Czas seansu**: ISO 8601 z offsetem, przeliczony do strefy KINA
-  (`2026-09-11T18:30:00+02:00`). Klient wyświetla dosłownie — bez
+  (<code>2026-09-11T18:30:00+02:00</code>). Klient wyświetla dosłownie — bez
   `toLocaleString()`. Widz w Londynie ma zobaczyć 18:30, godzinę z biletu.
 - **Timer**: zawsze para `expires_at` + `expires_in_seconds`. Zegar telefonu
   bywa przestawiony; datą klient się resynchronizuje, sekundami odlicza.
@@ -616,7 +644,7 @@ Błąd — jeden kształt dla wszystkiego:
 
 ### Etap 3 — decyzje projektowe (14–31)
 
-14. **Wersja API w ścieżce (`/api/v1`), nadawana przez `apiPrefix`.** Framework
+14. **Wersja API w ścieżce (<code>/api/v1</code>), nadawana przez `apiPrefix`.** Framework
     narzuca prefiks przed wczytaniem pliku tras, więc nie da się dodać endpointu
     bez wersji — nawet przez pomyłkę.
 15. **Identyfikator sesji zakupowej wydaje serwer.** 32 losowe znaki alfanumeryczne,
@@ -644,7 +672,7 @@ Błąd — jeden kształt dla wszystkiego:
     `storage/logs` między CLI (uid 1000) a PHP-FPM.
 23. **`Money` jako typ wartościowy, formatowanie po stronie serwera.** Kwoty
     w groszach (int), pole `formatted` liczy backend, bo `Intl` w przeglądarce
-    i `NumberFormat` w Darcie dają dla `pl_PL` różne wyniki (spacje, separatory).
+    i <code>NumberFormat</code> w Darcie dają dla `pl_PL` różne wyniki (spacje, separatory).
 24. **Czasy seansów w strefie kina, ISO 8601 z offsetem.** Widz w Londynie
     kupujący bilet do Krakowa ma zobaczyć godzinę z biletu, nie swoją lokalną.
 25. **Enum jako surowa wartość + osobne pole `*_label` po polsku.** Klient
@@ -673,12 +701,12 @@ Błąd — jeden kształt dla wszystkiego:
 ### Etap 3 — pułapki, na które trafiliśmy (F–I)
 
 - **F. `use Throwable;` w pliku bez namespace** (`bootstrap/app.php`) daje Warning
-  „The use statement with non-compound name has no effect”. `php -l` tego nie
+  „The use statement with non-compound name has no effect”. <code>php -l</code> tego nie
   wykrywa, a ostrzeżenie wypisuje się przed nagłówkami i psuje status HTTP.
   Rozwiązanie: w pliku bez namespace pisać `\Throwable` bez `use`.
 - **G. Domknięcia w `with()` i `withCount()` dostają różne obiekty.**
-  `with(['rel' => fn ($q) => ...])` dostaje obiekt relacji (`BelongsTo`,
-  `HasMany`), a `withCount(['rel as alias' => fn ($q) => ...])` dostaje
+  <code>with(['rel' =&gt; fn ($q) =&gt; ...])</code> dostaje obiekt relacji (`BelongsTo`,
+  `HasMany`), a <code>withCount(['rel as alias' =&gt; fn ($q) =&gt; ...])</code> dostaje
   `Builder`. Otypowanie pierwszego jako `Builder` kończy się `TypeError`.
 - **H. Laravel nie przebudowuje aplikacji między żądaniami w jednym teście.**
   Guard cachuje rozwiązanego użytkownika, więc test unieważnienia tokenu musi
@@ -772,11 +800,11 @@ Rozważone warianty:
 
 #### Wybrane rozwiązanie
 
-Karty i portfele dostają `payment_method_options[card][capture_method]=manual`,
+Karty i portfele dostają <code>payment_method_options[card][capture_method]=manual</code>,
 czyli **autoryzację bez pobrania**: bank blokuje środki, ale pieniądze nie
 zmieniają właściciela. BLIK zostaje przy pobraniu automatycznym (nie wspiera
 ręcznego capture), a jego ścieżkę ratunkową stanowi automatyczny zwrot.
-Ustawienie jest per metoda płatności, bo globalne `capture_method=manual`
+Ustawienie jest per metoda płatności, bo globalne <code>capture_method=manual</code>
 sprawiłoby, że Stripe w ogóle nie pokazałby klientowi BLIK-a.
 
 Całość opiera się na dwóch regułach.
@@ -845,11 +873,11 @@ odejście od dosłownego brzmienia zadania.
 2. **Maszyna stanów pod `SELECT ... FOR UPDATE`** na wierszu rezerwacji —
    właściwy zamek. Webhook i scheduler biorą ten sam wiersz, więc wykonują
    się po kolei i nie ma stanu pośredniego.
-3. **`UNIQUE (screening_id, seat_id) WHERE status <> 'cancelled'`** na
+3. **<code>UNIQUE (screening_id, seat_id) WHERE status &lt;&gt; 'cancelled'</code>** na
    biletach — ostatnia linia obrony przed podwójną sprzedażą.
 
 Po stronie operatora dochodzą **deterministyczne klucze idempotencji**
-(`booking:{ULID}:create-intent`, `:capture`, `:cancel`, `:refund`). Klucz
+(`booking:{ULID}:create-intent`, <code>:capture</code>, `:cancel`, `:refund`). Klucz
 losowy nie chroniłby przed ponowieniem po awarii, bo nowy proces wylosowałby
 nowy. Podwójne kliknięcie "Zapłać" zatrzymują niezależnie: zamek na blokadach
 w checkoucie, zapisane `stripe_payment_intent_id` i ten właśnie klucz.
@@ -963,7 +991,7 @@ sequenceDiagram
 |---|---|---|
 | Nowy element infrastruktury | nie — Redis już jest (cache, limitery, zamki) | nowy broker, konfiguracja, monitoring |
 | Sterownik w Laravelu | wbudowany, Horizon w przyszłości | pakiet zewnętrzny |
-| Opóźnienia (backoff) | natywnie (sorted set) | wtyczka `delayed_message_exchange` |
+| Opóźnienia (backoff) | natywnie (sorted set) | wtyczka <code>delayed_message_exchange</code> |
 | `ShouldBeUnique`, `onOneServer`, `withoutOverlapping` | ten sam Redis jako magazyn zamków | i tak potrzebny Redis |
 | Routing, wielu konsumentów, gwarancje potwierdzeń | podstawowe | mocna strona |
 
@@ -1054,7 +1082,7 @@ sprawdzający tylko nagłówek PNG przepuściłby nieczytelny kod.
 - **Czcionka DejaVu Sans** — wbudowane czcionki PDF (Helvetica) nie mają
   polskich znaków; zamiast „ą” byłoby „?”. Cache czcionek w `storage/fonts`.
 - **Bezpieczne opcje**: wyłączone zasoby zdalne, JavaScript i PHP w szablonie.
-  Tytuł filmu pochodzi z panelu admina; `<img src="http://...">` w opisie nie
+  Tytuł filmu pochodzi z panelu admina; <code>&lt;img src="http://..."&gt;</code> w opisie nie
   może zamienić renderera w narzędzie do skanowania sieci wewnętrznej.
 - **Obrazy jako data URI** (QR i logo) — konsekwencja wyłączenia zasobów zdalnych.
 - **Jeden bilet na stronę A4**: każdy bilet da się wydrukować i wręczyć
@@ -1117,7 +1145,7 @@ Kolejność sprawdzeń jest celowa — tańsze i niezdradzające informacji najp
    obsługa mogła pokierować widza do innej sali;
 5. okno czasowe: od `TICKET_VALIDATION_OPENS_MINUTES` przed początkiem do końca
    filmu (`ends_at`) → 409;
-6. **atomowy `UPDATE tickets SET status = 'used' … WHERE id = ? AND status = 'valid'`**;
+6. **atomowy <code>UPDATE tickets SET status = 'used' … WHERE id = ? AND status = 'valid'</code>**;
 7. gdy `UPDATE` nie zmienił wiersza, serwis czyta bilet ponownie i zwraca
    przyczynę: wykorzystany (z godziną pierwszego skanu) albo anulowany → 409.
 
@@ -1161,7 +1189,7 @@ niechcący. Seeder tworzy jedno konto obsługi na kino.
 Każde zadanie ma `withoutOverlapping()`, `onOneServer()` (zamek w Redisie —
 przy dwóch replikach schedulera nic nie wykona się dwa razy),
 `runInBackground()` i `appendOutputTo()`. Wyjście trafia do `/proc/1/fd/2`
-kontenera, czyli do `docker compose logs scheduler`; domyślne `/dev/null`
+kontenera, czyli do <code>docker compose logs scheduler</code>; domyślne `/dev/null`
 ukrywało błędy komend (pułapka V).
 
 **Ponawianie potwierdzeń.** Komenda bierze rezerwacje opłacone **15–120 minut
@@ -1172,7 +1200,7 @@ klienci dostali potwierdzenia do seansów, które już się odbyły. Po dłuższ
 awarii jest `--all`.
 
 **Przypomnienia.** Rezerwacja jest **najpierw zajmowana** jednym zapytaniem
-`UPDATE bookings … SET reminder_sent_at = now() FROM screenings … RETURNING id`,
+<code>UPDATE bookings … SET reminder_sent_at = now() FROM screenings … RETURNING id</code>,
 a dopiero potem powiadomienie trafia do kolejki. Dwa równoległe przebiegi nie
 wyślą dwóch przypomnień (stąd at-most-once). Pomijane są:
 
@@ -1197,7 +1225,7 @@ mailpit    SMTP :1025, interfejs :8025
 - `--max-time=3600` — worker kończy się co godzinę, a Docker go wznawia;
   wycieki pamięci w długo żyjącym procesie nie narastają.
 - **Worker trzyma kod w pamięci** — po zmianie kodu
-  `docker compose restart worker scheduler` (pułapka N).
+  <code>docker compose restart worker scheduler</code> (pułapka N).
 - Obraz PHP zawiera `zbar` i `imagemagick` wyłącznie na potrzeby testu
   dekodującego QR.
 
@@ -1272,7 +1300,7 @@ Parametry obrazu QR i PDF-a są w `config/tickets.php`.
   nie zrestartuje się kontenera `worker`.
 - **O. `retry_after` musi być większe niż `--timeout`.** Inaczej Redis oddaje
   trwające zadanie drugiemu procesowi i wykonuje się ono równolegle dwa razy.
-- **P. Pliki tworzone przez `docker compose exec` należą do roota.** Katalogi
+- **P. Pliki tworzone przez <code>docker compose exec</code> należą do roota.** Katalogi
   zakładamy w WSL jako zwykły użytkownik.
 - **Q. W `phpunit.xml` kolejka jest `sync`.** `dispatch()` wykonuje zadanie od
   razu, w środku testowanej akcji; testy przepływu używają `Queue::fake()`.
@@ -1293,24 +1321,24 @@ Parametry obrazu QR i PDF-a są w `config/tickets.php`.
 - **Y. Powiadomienia i mailable ignorują metodę `tries()`.** Liczbę prób trzeba
   podać właściwością `$tries`.
 - **Z. Nieistniejący pakiet.** Dekoder QR proponowany jako zależność PHP nie
-  jest na Packagist — sprawdzać przed `composer require`. Zastąpił go `zbarimg`.
-- **Z2. `zbarimg` bez `imagemagick` nie czyta PNG** (`NoDecodeDelegate`).
+  jest na Packagist — sprawdzać przed <code>composer require</code>. Zastąpił go `zbarimg`.
+- **Z2. `zbarimg` bez `imagemagick` nie czyta PNG** (<code>NoDecodeDelegate</code>).
 - **Z3. Logo zasłania środkowy wzorzec wyrównania QR wersji 7.** Rozwiązanie:
   krótszy token i wersja 6 (decyzja 66).
-- **AA. Błąd wewnątrz `$(...)` nie przerywa łańcucha `&&`.** Pusty wynik
-  `cat` szedł dalej jako pusty skrypt; pomaga `test -s plik &&`.
+- **AA. Błąd wewnątrz <code>$(...)</code> nie przerywa łańcucha `&&`.** Pusty wynik
+  `cat` szedł dalej jako pusty skrypt; pomaga <code>test -s plik &amp;&amp;</code>.
 - **AB. Flysystem zapisuje „prywatne” pliki z prawami 0700/0600.** Plik
   utworzony przez worker (uid 82) był nieczytelny dla innego procesu.
-- **AC. Dysk z `throw => false` zwraca `false` zamiast rzucać wyjątek.**
+- **AC. Dysk z `'throw' => false` zwraca `false` zamiast rzucać wyjątek.**
   Wynik `put()` / `move()` trzeba sprawdzać jawnie.
 - **AD. `PendingDispatch` wysyła zadanie w destruktorze.** Wyjątek kolejki
   wylatywał poza `try`; pomaga `unset()` wewnątrz bloku `try`.
 - **AE. `ShouldBeUnique` zakłada zamek także przy `Queue::fake()`.** Drugi
   dispatch w tym samym teście był po cichu pomijany.
-- **AF. `/tmp` w WSL znika po restarcie.** Kopie zapasowe zastępuje `git diff`.
-- **AG. `git diff` nie pokazuje plików nieśledzonych** — do tego `git status`.
+- **AF. `/tmp` w WSL znika po restarcie.** Kopie zapasowe zastępuje <code>git diff</code>.
+- **AG. <code>git diff</code> nie pokazuje plików nieśledzonych** — do tego <code>git status</code>.
 - **AH. PDO pgsql nie przyjmuje dwa razy tego samego parametru nazwanego.**
-  W surowym `UPDATE … RETURNING` użyte są parametry pozycyjne `?`.
+  W surowym <code>UPDATE … RETURNING</code> użyte są parametry pozycyjne `?`.
 
 ### Etap 5 — testy
 
@@ -1339,13 +1367,13 @@ Poza testami automatycznymi sprawdzone ręcznie na działającym środowisku:
 - zadanie celowo padające: trzy próby z opóźnieniami ok. 10 s i 40 s, wpis
   w `failed_jobs` i w logu workera;
 - kod QR odczytany przez `zbarimg` i aparat telefonu;
-- PDF: `pdftotext` (polskie znaki), `pdffonts` (osadzona DejaVu Sans);
+- PDF: `pdftotext` (polskie znaki), <code>pdffonts</code> (osadzona DejaVu Sans);
 - e-mail z załącznikiem w Mailpit; ponowny dispatch nie wysłał duplikatu;
 - pobranie PDF-a i QR przez `curl` z tokenem właściciela i odmowa dla innego
   użytkownika;
 - dwa równoległe skany tego samego biletu: jeden sukces, jeden
   „już wykorzystany”;
-- logi komend harmonogramu w `docker compose logs scheduler`;
+- logi komend harmonogramu w <code>docker compose logs scheduler</code>;
 - odzyskanie potwierdzenia komendą ponawiającą po zatrzymanym workerze.
 
 ### Etap 5 — znane ograniczenia i co dalej
@@ -1366,9 +1394,9 @@ Poza testami automatycznymi sprawdzone ręcznie na działającym środowisku:
   wymagałaby tabeli łączącej.
 - **PDF-y na dysku lokalnym.** Przy kilku replikach PHP potrzebny jest S3 lub
   inny wspólny dysk; `TicketPdfStore` jest jedynym miejscem do zmiany.
-- **Jeden Redis dla cache i kolejki, bez limitu `maxmemory`.** Dziś rośnie do
-  granic pamięci hosta. Docelowo osobne instancje: cache z limitem i `allkeys-lru`,
-  kolejka z `noeviction`, żeby wypychanie kluczy nigdy nie usunęło zadania.
+- **Jeden Redis dla cache i kolejki, bez limitu <code>maxmemory</code>.** Dziś rośnie do
+  granic pamięci hosta. Docelowo osobne instancje: cache z limitem i <code>allkeys-lru</code>,
+  kolejka z <code>noeviction</code>, żeby wypychanie kluczy nigdy nie usunęło zadania.
 - **`zbar` i `imagemagick` w obrazie produkcyjnym** — do usunięcia przez
   wieloetapowy Dockerfile (Etap 10), razem z przypięciem obrazu bazowego do
   konkretnej wersji.
@@ -1463,7 +1491,7 @@ także dla kupującego bez konta.
 - `ChannelAuthorizationService` ma jawną mapę *nazwa kanału → zasób → Policy*.
   Nieznany kanał to odmowa — nie ma „domyślnie wpuść”.
 - Podpis HMAC liczy ta sama biblioteka, której używa framework
-  (`getPusher()->authorizeChannel()`), więc serwis nie dotyka obiektu `Request`.
+  (<code>getPusher()-&gt;authorizeChannel()</code>), więc serwis nie dotyka obiektu `Request`.
 - Sukces to surowe `{"auth": "klucz:podpis"}` bez koperty `data` — tego wymaga
   protokół Pushera. Błędy mają zwykły kształt z polem `code`.
 
@@ -1489,7 +1517,7 @@ RETURNING version
 - Upsert blokuje wiersz licznika do COMMIT, więc **numer wersji odpowiada
   kolejności commitów**. Transakcje, które przegrały wyścig o miejsce (409),
   do licznika w ogóle nie dochodzą.
-- Plan sali (`GET /screenings/{id}/seat-map`) zwraca `seat_state_version`.
+- Plan sali (`GET /api/v1/screenings/{screening}/seat-map`) zwraca `seat_state_version`.
   Wersję czytamy **przed** stanem miejsc, więc jest dolną granicą: stan może
   zawierać zmiany nowsze niż wersja, nigdy starsze. Nie trzeba `REPEATABLE READ`.
 
@@ -1501,7 +1529,7 @@ potem subskrypcja”):
 3. Po `subscription_succeeded` ponowny odczyt wersji. Jeśli jest większa niż
    `V`, zmiana wpadła w okno między snapshotem a subskrypcją — klient pobiera
    plan jeszcze raz. **Kolejność z wymogu ma to okno; licznik je zamyka.**
-4. Zdarzenia z `version <= znana` klient pomija; zdarzenie z `version > znana + 1`
+4. Zdarzenia z `version <= znana` klient pomija; zdarzenie z <code>version &gt; znana + 1</code>
    oznacza lukę → `GET seat-map`. `seats.resync` → `GET seat-map`.
 
 Zdarzenia niosą stan absolutny, więc ponowne zastosowanie jest nieszkodliwe.
@@ -1535,7 +1563,7 @@ COMMIT ────────────────────────�
   hoście: 0,51 s zamiast 10,00 s.
 - **Bezpiecznik** (`RealtimeCircuitBreaker`): klucz w cache (Redis) z czasem życia.
   Dopóki istnieje, żaden proces — php-fpm, worker, scheduler — nie próbuje
-  wysyłać. `Cache::add()` to w Redisie `SET NX`, więc z kilku procesów, które
+  wysyłać. `->add()` repozytorium cache to w Redisie <code>SET NX</code>, więc z kilku procesów, które
   zawiodły jednocześnie, dokładnie jeden zapisuje ostrzeżenie. Awaria samego
   cache nie blokuje wysyłki (*fail-open*).
 
@@ -1576,7 +1604,7 @@ Koszt awarii Reverba przed i po bezpieczniku:
 
 ### Etap 6 — decyzje projektowe (91–127)
 
-91. **Ręczna instalacja Reverba** zamiast `install:broadcasting` / `reverb:install` —
+91. **Ręczna instalacja Reverba** zamiast <code>install:broadcasting</code> / <code>reverb:install</code> —
     kontrola nad każdym plikiem; instalatory dopisują trasy kanałów i zależności frontu.
 92. **Celowana aktualizacja zależności**: Guzzle 7 zamiast przeskoku całego drzewa
     (3 pakiety w dół zamiast 34 zmian, framework bez zmiany wersji).
@@ -1614,22 +1642,22 @@ Koszt awarii Reverba przed i po bezpieczniku:
 118. **Jedno zdarzenie feedu na dwa kanały** — jedno żądanie do Reverba.
 119. **Pola jak w REST** (`total`, `status_label`) i biała lista kluczy w testach.
 120. **`seats_count` z `seat_locks`** — są przypięte do rezerwacji przy każdym statusie.
-121. **Bez `tickets_ready`** — pobranie PDF-a generuje brakujący plik, a flaga
+121. **Bez <code>tickets_ready</code>** — pobranie PDF-a generuje brakujący plik, a flaga
     wprowadzałaby problem kolejności zdarzeń.
 122. **Bezpiecznik w cache z TTL**, `add()` = jeden log, *fail-open*, `BROADCAST_BREAKER_SECONDS`.
 123. **Sonda WebSocket w repozytorium** (`tools/realtime-probe`), `pusher-js` 8.6.0
     przypięty z `package-lock.json`.
 124. **Node w kontenerze z UID użytkownika**; tokeny sondy w pliku `0600`, usuwane po teście.
 125. **Reconnect: REST → subskrypcja → ponowny odczyt wersji**; luka w numeracji → snapshot.
-126. **`allowed_origins` = `*`** — klienci mobilni i serwerowi nie wysyłają `Origin`,
+126. **`allowed_origins` = `*`** — klienci mobilni i serwerowi nie wysyłają <code>Origin</code>,
     a Reverb z listą odrzuca brak nagłówka; dane chronią podpisy kanałów i Policies.
 127. **`starts_at` w strefie kina, `occurred_at` w strefie aplikacji** — oba ISO 8601 z offsetem.
 
 ### Etap 6 — pułapki, na które trafiliśmy (AI–AV)
 
-- **AI. Guzzle 8 kontra `guzzlehttp/psr7` 2.x.** `composer require laravel/reverb`
-  kończył się kodem 2; `-W` zmieniłby 34 pakiety razem z frameworkiem.
-  Rozwiązanie: `require --no-update`, potem `update` czterech wskazanych pakietów.
+- **AI. Guzzle 8 kontra `guzzlehttp/psr7` 2.x.** <code>composer require laravel/reverb</code>
+  kończył się kodem 2; <code>-W</code> zmieniłby 34 pakiety razem z frameworkiem.
+  Rozwiązanie: <code>require --no-update</code>, potem `update` czterech wskazanych pakietów.
 - **AJ. Domyślne timeouty publikacji to 10 s i 30 s.** Przy niedziałającym
   Reverbie blokada miejsca wisiałaby 10 sekund.
 - **AK. `Broadcast::routes()` odrzuca gościa przed callbackiem kanału** — kanał
@@ -1639,27 +1667,27 @@ Koszt awarii Reverba przed i po bezpieczniku:
   przełączają się na broadcaster podpisujący z testowym kluczem.
 - **AM. `BroadcastManager` pamięta utworzone połączenia.** Zmiana configu
   w teście nie działa bez `forgetDrivers()`.
-- **AN. Statyczny `proxy_pass http://reverb:8080`** — gdy kontenera nie ma,
+- **AN. Statyczny <code>proxy_pass http://reverb:8080</code>** — gdy kontenera nie ma,
   nginx nie startuje wcale i pada całe API.
 - **AO. `sed -i` na pliku zamontowanym pojedynczo.** `sed` tworzy nowy plik
   (nowy i-węzeł), a kontener dalej widzi stary.
-- **AP. Reverb odrzuca połączenie bez nagłówka `Origin`,** gdy `allowed_origins`
+- **AP. Reverb odrzuca połączenie bez nagłówka <code>Origin</code>,** gdy `allowed_origins`
   nie jest `*`. `pusher-js` w Node i klienci mobilni tego nagłówka nie wysyłają.
 - **AQ. `PusherBroadcaster` opakowuje `Pusher\ApiErrorException`
   w `BroadcastException`** — klasa wyjątku zależy od tego, czy wołamy klienta
   Pushera wprost, czy przez broadcaster.
-- **AR. Blok skopiowany bez pierwszej linii** (`cd ~/cinema && {`) — polecenia
+- **AR. Blok skopiowany bez pierwszej linii** (<code>cd ~/cinema &amp;&amp; {</code>) — polecenia
   wykonały się pojedynczo, a `cd` zmienił katalog powłoki.
 - **AS. Nowe pliki gotowe, łatka niezastosowana.** Testy padły na „zdarzenie
-  wysłane 0 razy”, a `wc -l` nowych plików się zgadzało. Przed testami:
-  `git status` musi pokazać `M` przy łatanych plikach.
+  wysłane 0 razy”, a <code>wc -l</code> nowych plików się zgadzało. Przed testami:
+  <code>git status</code> musi pokazać `M` przy łatanych plikach.
 - **AT. Raport nadpisywany `>`, commit dopisywany `>>`.** Plik z samym wynikiem
   commitu wyglądał na „zrobione”, choć pełnego zestawu nie uruchomiono.
-  Komenda commitu sprawdza teraz w raporcie `EXIT całość: 0`.
+  Komenda commitu sprawdza teraz w raporcie <code>EXIT całość: 0</code>.
 - **AU. `pusher-js` 8 wymaga opcji `cluster`** nawet przy własnym `wsHost`.
-- **AV. Po restarcie Dockera / WSL** pełny zestaw kończy się `EXIT 1` bez linii
-  `Tests:`, a tinker wypisuje `Could not open input file: artisan` — nieaktualne
-  montowanie katalogu, pomaga `cinema-up`.
+- **AV. Po restarcie Dockera / WSL** pełny zestaw kończy się <code>EXIT 1</code> bez linii
+  <code>Tests:</code>, a tinker wypisuje <code>Could not open input file: artisan</code> — nieaktualne
+  montowanie katalogu, pomaga <code>cinema-up</code>.
 
 ### Etap 6 — testy
 
@@ -1719,7 +1747,7 @@ uruchamiający ją jednym poleceniem trafi do Etapu 10 (CI).
 - **Sonda wywołuje zdarzenia rezerwacji próbną wysyłką**, a nie prawdziwym
   checkoutem (ten tworzyłby płatność w Stripe) — przejścia pokrywają testy.
 - **`.env.example` ma `CACHE_STORE=database`**, a środowisko używa Redisa;
-  bez `APP_NAME` klucze w Redisie mają prefiks `laravel-…`. Porządek w Etapie 10.
+  bez `APP_NAME` klucze w Redisie mają prefiks <code>laravel-…</code>. Porządek w Etapie 10.
 
 ---
 
@@ -1848,7 +1876,7 @@ catalog:repertoire:day:c3:2026-09-20:g2.5.11      (epoka . kino 3 . filmy)
 - **Limity:** reguła `max:5120` (5 MB), a PHP przyjmuje do 8 MB
   (`docker/php/conf.d/uploads.ini`, podpięty jako `zz-uploads.ini`) — plik 6 MB
   dostaje polski komunikat walidacji zamiast cichego odrzucenia przez PHP.
-- **Dysk `public`** z względnym dowiązaniem `public/storage`; dysk `local` ma
+- **Dysk `public`** z względnym dowiązaniem <code>public/storage</code>; dysk `local` ma
   `'serve' => false`, bo trasa `storage/{path}` zajmowała ten sam prefiks.
   `APP_URL` wskazuje port nginx (8080) — adresy plakatów w mailach i kolejce.
 - **`GET /api/v1/movies`** — aktywne filmy, najnowsze premiery pierwsze, bez opisu.
@@ -2080,7 +2108,7 @@ powodu jest stan zwrotu `refund`.
 150. **Plakat przekodowany do JPEG** (JPG/PNG, ≤ 16 Mpx, ≥ 300 × 450, ramka 800 × 1200); wymiary z nagłówka przed dekodowaniem.
 151. **Plik plakatu przed transakcją, nowa nazwa przy każdej zmianie**, stary usuwany po COMMIT, nowy przy ROLLBACK.
 152. **Limity uploadu PHP w pliku ini podpiętym jako wolumen** (8M/10M) przy regule aplikacji 5 MB.
-153. **Dysk `local` z `'serve' => false`, względne `public/storage`, `APP_URL` na porcie nginx.**
+153. **Dysk `local` z `'serve' => false`, względne <code>public/storage</code>, `APP_URL` na porcie nginx.**
 154. **`GET /api/v1/movies` z jedną listą w cache** i stroną wycinaną w PHP; bez adresów URL w cache.
 155. **`ScreeningTimeline` jako jedyne miejsce liczenia slotu**; bufor globalny, zmiana działa na nowe seanse.
 156. **Kolizje w trzech warstwach** (blokada sali, zapytanie z listą, `EXCLUDE` + `23P01`) z jedną definicją nakładania.
@@ -3257,6 +3285,18 @@ Aplikacja mobilna potrzebowała dwóch rzeczy, których serwer jeszcze nie miał
   Każda rezerwacja w osobnej transakcji; awaria jednej nie przerywa reszty, ale **blokuje
   odwołanie seansu** — inaczej ktoś zostałby z ważnym biletem na seans, którego nie ma.
   Powiadomienie o odwołaniu idzie teraz mailem **i** pushem, na tym samym rejestrze urządzeń.
+
+Testy PHP dodane i zmienione w Etapie 9 (stan na koniec etapu; klasy z wcześniejszych etapów
+wymienione z pełną liczbą testów, a wiersz „Etapy 1–8” ich nie zawiera):
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `ScreeningCancellationServiceTest` | 5 | wszystkie rezerwacje anulowane i klienci powiadomieni przed seansem, zwroty zostawione komendzie w tle, awaria jednej rezerwacji zostawia seans, powód sprawdzany raz przed zmianami, seans bez rezerwacji |
+| `ScreeningPanelTest` | 9 | +1: samo potwierdzenie w panelu niczego nie zmienia |
+| `ClientConfigApiTest` | 5 | +1: blok `push.android` obok webowego |
+| `PushNotificationsTest` | 9 | +2: odwołany seans mailem i pushem bez danych osobowych; bez włączonego kanału sam mail |
+| Etapy 1–8 | 469 | bez klas wymienionych wyżej |
+| **Razem** | **497** | |
 
 ### Testy
 

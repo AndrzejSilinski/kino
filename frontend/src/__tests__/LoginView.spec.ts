@@ -3,6 +3,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { ApiError } from '@/api/errors';
+import { bezWidokow } from './fixtures/router';
 
 const api = vi.hoisted(() => ({ login: vi.fn(), register: vi.fn(), logout: vi.fn(), me: vi.fn() }));
 vi.mock('@/api/client', () => ({ authApi: api }));
@@ -11,7 +12,7 @@ const { routes } = await import('@/router');
 const { default: LoginView } = await import('@/views/LoginView.vue');
 
 async function mountAt(url: string) {
-  const router = createRouter({ history: createMemoryHistory(), routes });
+  const router = createRouter({ history: createMemoryHistory(), routes: bezWidokow(routes) });
   await router.push(url);
   const wrapper = mount(LoginView, { global: { plugins: [router] } });
   return { wrapper, router };

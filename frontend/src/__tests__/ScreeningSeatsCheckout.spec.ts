@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { createMemoryHistory, createRouter } from 'vue-router';
 import { booking, pendingCart, REFERENCE } from './fixtures/checkout';
 import { cartOf, mapSeat, snapshot } from './fixtures/seats';
+import { bezWidokow } from './fixtures/router';
 
 const seats = vi.hoisted(() => ({ seatMap: vi.fn(), cart: vi.fn(), lock: vi.fn(), release: vi.fn(), releaseAll: vi.fn() }));
 const bookings = vi.hoisted(() => ({ checkout: vi.fn(), abandonPayment: vi.fn() }));
@@ -17,7 +18,7 @@ const A1 = 891;
 const A2 = 892;
 
 async function mountView() {
-  const router = createRouter({ history: createMemoryHistory(), routes });
+  const router = createRouter({ history: createMemoryHistory(), routes: bezWidokow(routes) });
   await router.push('/screenings/334/seats');
   const wrapper = mount(ScreeningSeatsView, { global: { plugins: [router] } });
   await flushPromises();
