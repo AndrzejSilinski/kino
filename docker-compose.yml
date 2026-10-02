@@ -180,20 +180,33 @@ services:
   # ------------------------------------------------------------------
   # Nginx - HTTP server, the only publicly exposed container
   # ------------------------------------------------------------------
+  #
+  # Etap 10, blok E: obraz cinema/nginx:dev (docker/nginx/Dockerfile) — konfiguracja w obrazie
+  # zamiast montażu pliku (pułapka ET), HTTPS na :443 z certyfikatem z docker/nginx/certs/
+  # albo samopodpisanym. Obraz bazowy nginx przypięty po digeście w Dockerfile.
+  # Po zmianie default.conf, cinema.conf albo tls.sh:
+  #   docker compose up -d --build --force-recreate nginx
   nginx:
-    # Etap 10, blok D: obrazy infrastruktury przypięte po digeście (indeks wieloplatformowy,
-    # rozpoznanie Etapu 10). Tag zostaje dla czytelnika; o treści decyduje digest.
-    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+      target: dev
+    image: cinema/nginx:dev
     container_name: cinema_nginx
     restart: unless-stopped
     ports:
       - "8080:80"   # application available at http://localhost:8080
+      - "8443:443"  # Etap 10, blok E: https://localhost:8443 (wss://, Web Push poza localhost)
+    environment:
+      # Dodatkowe nazwy/adresy w samopodpisanym certyfikacie (po przecinku), np. adres komputera
+      # w sieci lokalnej. Zmiana wymaga usunięcia wolumenu nginxtls albo własnego certyfikatu.
+      CINEMA_TLS_HOSTS: ${CINEMA_TLS_HOSTS:-}
     volumes:
       - ./backend:/var/www/html
-      # Pojedynczy plik jest związany z i-węzłem (pułapka BI): edytor, sed -i i git checkout
-      # zapisują NOWY plik, a kontener widzi stary — po zmianie: docker compose up -d --force-recreate nginx.
-      # Etap 10: to ostatni montaż pliku w środowisku deweloperskim (pułapka ET) — do bloku E (TLS).
-      - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Własny certyfikat (cert.pem + key.pem, np. z mkcert) — katalog, tylko do odczytu.
+      - ./docker/nginx/certs:/etc/nginx/certs-host:ro
+      # Samopodpisany certyfikat i kopia własnego — przetrwają odtworzenie kontenera.
+      - nginxtls:/etc/nginx/tls
       # Etap 8: SPA z frontend/dist. Montujemy CAŁY katalog frontend/, a nie dist/:
       # brakujący katalog wolumenu Docker tworzy jako root i "npm run build"
       # nie mógłby potem do niego pisać.
@@ -310,6 +323,7 @@ services:
 volumes:
   pgdata:
   redisdata:
+  nginxtls:
 
 networks:
   cinema:

@@ -1,0 +1,5 @@
+# Etap 10, blok E: własny certyfikat TLS dla nginx (np. z mkcert) jako cert.pem i key.pem.
+# Klucz prywatny nigdy do gita — katalog jest w repozytorium tylko po to, żeby Docker nie zakładał
+# go jako root przy montażu.
+*
+!.gitignore

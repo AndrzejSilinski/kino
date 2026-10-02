@@ -82,12 +82,33 @@ zanim podłączy dystrybucję WSL. Kontenery z montażami z repozytorium kończ�
 | Adres | Co |
 |---|---|
 | <http://localhost:8080> | aplikacja klienta (SPA Vue), patrz Etap 8 |
+| <https://localhost:8443> | to samo przez HTTPS (Etap 10, blok E) — `wss://`, Web Push poza localhost |
 | <http://localhost:5173> | serwer deweloperski Vite: `docker compose --profile dev up -d frontend` |
 | <http://localhost:8080/api/v1> | REST API |
 | <http://localhost:8080/docs/api> | dokumentacja API (Scramble) |
 | <http://localhost:8080/admin> | panel administracyjny (administrator i obsługa kina), patrz Etap 7 |
 | <http://localhost:8025> | Mailpit — cała poczta wysłana przez aplikację |
-| `ws://localhost:8080/app/{REVERB_APP_KEY}` | WebSocket (Reverb przez nginx), patrz Etap 6 |
+| `ws://localhost:8080/app/{REVERB_APP_KEY}` | WebSocket (Reverb przez nginx), patrz Etap 6; przez HTTPS: `wss://localhost:8443/app/…` |
+
+**HTTPS w środowisku deweloperskim (Etap 10, blok E).** nginx wystawia ten sam serwis na
+<https://localhost:8443> (TLS 1.2/1.3, HTTP/2). Bez własnego certyfikatu generuje samopodpisany
+(przeglądarka ostrzeże; `wss://` i API działają po akceptacji wyjątku, ale service worker
+i Web Push wymagają certyfikatu, któremu przeglądarka ufa). Zaufany certyfikat lokalny, także dla
+adresu komputera w sieci (telefon, inny komputer), daje mkcert — jednorazowo, na Windows:
+
+```powershell
+winget install FiloSottile.mkcert
+mkcert -install                      # lokalne CA w magazynie zaufanych certyfikatów Windows
+mkcert -cert-file cert.pem -key-file key.pem localhost 127.0.0.1 192.168.1.10
+```
+
+Pliki `cert.pem` i `key.pem` trafiają do `docker/nginx/certs/` (katalog poza gitem), potem
+`docker compose up -d --force-recreate nginx`. Klucz CA mkcert zostaje na komputerze, który go
+wygenerował — nigdy w repozytorium. Linki z maili i powiadomień push biorą adres z `APP_URL`;
+`fcm_options.link` dostają tylko adresy HTTPS, więc do testu kliknięcia w powiadomienie:
+`APP_URL=https://localhost:8443` (albo adres z certyfikatu). HSTS i przekierowanie HTTP → HTTPS
+są tylko w produkcji: na localhost przeglądarka zapamiętałaby HTTPS dla całego hosta, a aplikacja
+mobilna łączy się przez `http://localhost:8080` (`adb reverse`).
 
 Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
 
@@ -114,7 +135,10 @@ Konta testowe (hasło `password`):
 cinema/
 ├── docker-compose.yml        php, worker, scheduler, reverb, nginx, postgres, redis, mailpit, frontend (profil dev)
 ├── docker/
-│   ├── nginx/default.conf    SPA z frontend/dist, prefiksy Laravela do PHP-FPM, /app/ do Reverba, CSP
+│   ├── nginx/default.conf    (Etap 10) serwery :80 i :443 (TLS) — wspólna treść w nginx/cinema.conf
+│   ├── nginx/cinema.conf     SPA z frontend/dist, prefiksy Laravela do PHP-FPM, /app/ do Reverba, CSP
+│   ├── nginx/Dockerfile      (Etap 10) obraz cinema/nginx:dev; nginx/tls.sh — certyfikat przy starcie
+│   ├── nginx/certs/          (Etap 10) własny certyfikat TLS (mkcert) — poza gitem
 │   ├── secrets/              (Etap 8) plik konta serwisowego Firebase — poza gitem, montowany tylko do odczytu
 │   ├── php/Dockerfile        (Etap 10) etapy base/dev/vendor/prod, obrazy bazowe po digeście
 │   ├── php/entrypoint.sh     (Etap 10) .env i klucze w dev, composer, storage, migracje, gotowość
@@ -295,7 +319,7 @@ wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
 
 | Zestaw | Testów | Klas / plików | Uruchomienie |
 |---|---:|---|---|
-| PHPUnit | **509** | 72 klas | <code>docker compose exec php php artisan test</code> |
+| PHPUnit | **513** | 73 klas | <code>docker compose exec php php artisan test</code> |
 | Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
 | Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
 
@@ -1737,7 +1761,8 @@ blokuje i zwalnia miejsce przez API w chwilach, które sonda sama sygnalizuje.
   w payloadzie, a nie podpis.
 - **Jedna instancja Reverba.** Skalowanie poziome wymaga włączenia skalowania
   Reverba przez Redis pub/sub oraz load balancera przepuszczającego WebSocket.
-- **Brak `wss://` w środowisku deweloperskim** — TLS na nginx w Etapie 10.
+- ~~**Brak `wss://` w środowisku deweloperskim**~~ — **rozwiązane w Etapie 10** (blok E):
+  nginx wystawia <https://localhost:8443>, a klienci wybierają `wss://` sami, według adresu strony.
 - **Po awarii Reverba wysyłka wraca najpóźniej po 10 s** (bezpiecznik). Klienci
   wykrywają lukę po numerze wersji albo odświeżają stan przy reconnect.
 - **Teoretyczny deadlock** między `fulfil()` (blokady rezerwacji w kolejności
@@ -2179,7 +2204,9 @@ powodu jest stan zwrotu `refund`.
 - **BH. Dwa przyciski `radio` z tą samą wartością** (`standard`) w edytorze układu — wybór
   typu miejsca był niejednoznaczny; testy komponentu tego nie widzą, wykrył to dopiero Playwright.
 - **BI. Pojedynczy plik podpięty jako wolumen jest związany z i-węzłem.** Edytor, `sed -i`
-  i `git checkout` zapisują nowy plik, a kontener widzi stary — potrzebne `--force-recreate`.
+  i <code>git checkout</code> zapisują nowy plik, a kontener widzi stary — potrzebne `--force-recreate`.
+  Od Etapu 10 (bloki D i E) stos nie montuje już pojedynczych plików: `uploads.ini`
+  i konfiguracja nginx są w obrazach.
 - **BJ. Po odtworzeniu kontenera `php` trzeba zrestartować nginx** — `fastcgi_pass php:9000`
   rozwiązuje adres tylko przy starcie nginx.
 - **BK. `UploadedFile::fake()` żyje tyle, co obiekt** — plik tymczasowy znika razem z nim;
@@ -2290,8 +2317,8 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
 - **Porządki na Etap 10:** ~~zdublowane wpisy w `.env.example` (`SCREENING_ADS_MINUTES`,
   martwe <code>SCREENING_CLEANUP_BUFFER</code>), `CACHE_STORE` i `SESSION_DRIVER` z wartościami
   <code>database</code> w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie)~~ i ~~niespójne
-  wartości `age_rating` w `MovieFactory`~~ — **rozwiązane w Etapie 10** (blok B); zaufane proxy
-  przy TLS (blok E), skrypt uruchamiający sondę WebSocket (blok B2) i sprawdzacz zgodności
+  wartości `age_rating` w `MovieFactory`~~ — **rozwiązane w Etapie 10** (blok B); ~~zaufane proxy
+  przy TLS~~ (blok E: `TRUSTED_PROXIES` w `config/trustedproxy.php`, testy w `TrustedProxiesTest`), skrypt uruchamiający sondę WebSocket (blok B2) i sprawdzacz zgodności
   README w CI (blok F; od bloku A2 uruchamia go wykonawca paczek po każdym bloku).
 
 ---
@@ -3096,8 +3123,10 @@ repozytorium (jak sonda z Etapu 6) i piszą raporty z licznikiem porażek.
   bo push wysyła wyłącznie kolejka.
 - **Znacznik push po płatności nie mówi o doręczeniu**; FCM nie potwierdza wyświetlenia
   powiadomienia bez dodatkowej telemetrii.
-- **Web Push działa na `localhost` i HTTPS**; na innym hoście po HTTP przeglądarka nie da
-  subskrypcji (TLS w Etapie 10), a link z FCM (`fcm_options.link`) działa dopiero na HTTPS.
+- ~~**Web Push działa tylko na `localhost`**~~ — **rozwiązane w Etapie 10** (blok E): stos ma
+  HTTPS na porcie 8443; z certyfikatem mkcert subskrypcja działa także pod adresem komputera
+  w sieci, a z `APP_URL` na HTTPS powiadomienie dostaje `fcm_options.link`. Bez zaufanego
+  certyfikatu (samopodpisany) przeglądarka nadal odmówi rejestracji service workera.
 - **Brak testów e2e w repozytorium** (Playwright): scenariusze z dwiema przeglądarkami
   i płatnością są sprawdzane skryptami i listą kontrolną — do CI w Etapie 10.
 - **Przypomnienie wychodzi tylko przy zakupie przed oknem** (Etap 5); zakup na mniej niż

@@ -629,3 +629,99 @@ wywołania i wraca do niego przed `exec`; test dymny sprawdza `docker run -w /wo
 Nauczka: entrypoint owija KAŻDE użycie obrazu — Compose, CI, `docker run` z narzędzi — więc
 poza swoimi krokami nie może zmieniać kontekstu wywołującego (katalog, argumenty, użytkownik);
 obraz testuj także w roli narzędzia, a nie tylko usługi.
+
+Wynik bloku D (commit `6a4ad04`, trzeci przebieg): test dymny 57/0, PHP 509 (w tym 4 nowe),
+sprawdzacz README 1740/0. Obraz prod 61 MB wobec 75 MB dev (rozmiar wg `docker image inspect`).
+Pierwszy przebieg: 6 FAIL — 1 prawdziwy (plik Firebase nieczytelny dla workera; Andrzej:
+`chgrp 82`, `chmod 640`) i 5 fałszywych (EU, EV); drugi: entrypoint psuł `docker run -w` (EW).
+
+---
+
+## Blok E — HTTPS na nginx, zaufane proxy, Web Push poza localhost
+
+### Rozpoznanie
+
+- nginx 1.27.5 (przypięty): `http_ssl_module`, `http_v2_module`, `http_v3_module`; biblioteka
+  libssl 3, ale **bez polecenia `openssl`**; Alpine 3.21.3.
+- `cinema/php:dev` ma `openssl` (OpenSSL 3.5.8). Port 8443 na Windows wolny. `mkcert` nie jest
+  zainstalowany, `winget` jest. Adres komputera w Wi-Fi: 192.168.1.152.
+- W kodzie: klienci (Vue, panel) wybierają `wss://`/`ws://` z adresu strony i mają na to testy;
+  `fcm_options.link` jest od Etapu 8 i czeka tylko na `APP_URL` z HTTPS; `bootstrap/app.php` nie
+  konfiguruje zaufanych proxy, a wbudowany `TrustProxies` czyta `config('trustedproxy.proxies')`
+  przy każdym żądaniu — wystarczy plik konfiguracji, bez własnego middleware.
+
+### Decyzje
+
+**403. TLS kończy nginx; dwa serwery: :80 zostaje, :443 dochodzi** (<https://localhost:8443>,
+TLS 1.2/1.3, HTTP/2). `http://localhost:8080` zostaje, bo korzysta z niego aplikacja mobilna
+(`adb reverse`), sonda WebSocket i skrypty. **Bez przekierowania i bez HSTS w dev:** HSTS dotyczy
+całego hosta bez portu, więc przeglądarka zamieniłaby też `http://localhost:8080` na HTTPS —
+zepsułoby to i ten projekt, i każdy inny na localhost. Przekierowanie i HSTS — tylko produkcja.
+Wspólna treść obu serwerów w `docker/nginx/cinema.conf` (include), a nie w dwóch kopiach.
+
+**404. Certyfikat: własny z `docker/nginx/certs/` albo samopodpisany do wolumenu** (`tls.sh`
+w `/docker-entrypoint.d/` obrazu nginx). Własny (mkcert) ma pierwszeństwo przy każdym starcie;
+samopodpisany powstaje raz i przetrwa odtworzenie kontenera (wolumen `nginxtls`); znacznik
+pochodzenia sprawia, że po usunięciu własnego wraca samopodpisany zamiast starej kopii. Nic nie
+trafia do katalogu repozytorium, klucz ma prawa 600. Odrzucone: certyfikat w repozytorium
+(zakaz z promptu), generowanie w kontenerze php do bind mountu (pliki roota w repozytorium —
+pułapka ES), Let's Encrypt (wymaga publicznej domeny — to sprawa wdrożenia produkcyjnego).
+Wszystkie ścieżki skryptu sprawdzone lokalnie: pierwszy start, drugi start, własny, usunięty.
+
+**405. Obraz `cinema/nginx:dev` z konfiguracją w środku** (`docker/nginx/Dockerfile`, baza po
+digeście, `openssl` tylko dla `tls.sh`). Po blokach D i E stos nie montuje już żadnego
+pojedynczego pliku — znikają oba miejsca porażki z pułapki ET i pułapka BI.
+
+**406. Zaufane proxy: `config/trustedproxy.php` z `TRUSTED_PROXIES`, domyślnie nikomu.** Za nginx
+nie są potrzebne: FastCGI przekazuje `HTTPS=on`. Lista jest dla zewnętrznego load balancera albo
+CDN przed nginx. Do tego nginx jako brzeg **nadpisuje** `X-Forwarded-For`/`-Proto` własną
+wiedzą, zeruje `X-Forwarded-Host`/`-Port` i usuwa nagłówek `Proxy` (httpoxy) — gdyby ktoś dopisał
+do listy sieć Dockera, klient nadal nie poda sobie cudzego IP (limity logowania i blokad miejsc
+są liczone po IP) ani HTTPS. Sprawdzone na żywo lokalnie: nginx z tą konfiguracją przed
+minimalnym serwerem FastCGI, który odsyła otrzymane parametry — `X-Forwarded-For: 6.6.6.6`
+od klienta dotarł jako adres połączenia, `Proxy` i `X-Forwarded-Host` nie dotarły wcale.
+Odrzucone: `TRUSTED_PROXIES=*` domyślnie (każdy klient ustawia sobie IP), własny middleware
+(wbudowany robi to samo z konfiguracji).
+
+**407. `SESSION_SECURE_COOKIE` puste w dev, `true` w produkcji; `APP_URL` w `.env.example` zostaje
+na HTTP.** Panel działa w dev pod oboma adresami. Przełączenie linków z maili i push na HTTPS to
+świadoma zmiana jednej zmiennej — ma sens z certyfikatem, któremu ufa przeglądarka.
+
+**408. Web Push poza localhost wymaga ZAUFANEGO certyfikatu — mkcert.** Przy samopodpisanym
+przeglądarka odmawia rejestracji service workera, więc „HTTPS” sam nie wystarcza. README ma
+instrukcję (Windows: `winget`, `mkcert -install`, certyfikat z adresem komputera w sieci).
+CA i jego klucz zostają w profilu Windows, nigdy w repozytorium. Test na żywo (subskrypcja pod
+adresem z sieci, kliknięcie w powiadomienie z `fcm_options.link`) — osobna lista kontrolna,
+na danych testowych Andrzeja.
+
+**409. Klienci bez zmian.** Schemat WebSocketu wynika z adresu strony (testy Vitest z Etapu 8:
+`http:` → `ws` 8080, `https:` → `wss` 443); po stronie serwera publikacja do Reverba zostaje
+po HTTP wewnątrz sieci Dockera.
+
+### Pułapki
+
+**EX. Kontrola ujemna zawiodła po stronie KLIENTA, a wyglądała na odpowiedź serwera.** Objaw:
+lokalne sprawdzenie „TLS 1.1 odrzucony” dało błąd — ale `no protocols available`
+z `tls_setup_handshake`, czyli OpenSSL 3 klienta nawet nie wysłał powitania (TLS 1.1 wyłączony
+domyślnie poziomem bezpieczeństwa). Serwer nie był w ogóle pytany. Dopiero klient z
+`-cipher DEFAULT@SECLEVEL=0` dostał od serwera `alert protocol version` (alert 70), a TLS 1.2
+z tego samego klienta przeszedł. Nauczka: test „X jest odrzucane” jest dowodem tylko wtedy,
+gdy odrzucenie przychodzi od sprawdzanej strony — sprawdź, KTO zgłosił błąd, i dołóż kontrolę
+dodatnią tym samym narzędziem (tu: TLS 1.2 przyjęty).
+
+**EY. Test, który ustawia `config()` sam, omija drogę ze zmiennej środowiskowej.** Objaw: mutacja
+„plik konfiguracji zawsze zwraca null” przeszła przez trzy testy zaufanych proxy — wszystkie
+ustawiały `config(['trustedproxy.proxies' => …])` bezpośrednio, więc nie sprawdzały, czy
+`TRUSTED_PROXIES` w ogóle do konfiguracji dociera. Dopisany test czyta plik konfiguracji
+z ustawioną zmienną (wartość i pusty napis). Nauczka: przy funkcji sterowanej zmienną
+środowiskową jeden test musi przejść całą drogę env → config → zachowanie; testy z gotową
+konfiguracją sprawdzają tylko drugą połowę.
+
+**EZ. Sprawdzenie stanu drzewa gita w teście, który biegnie przed commitem bloku.** Objaw:
+pierwszy przebieg bloku E — 36 OK i jeden FAIL „nowe pliki w docker/nginx/certs”. Przyczyna:
+`git status` pokazał jako nowy `docker/nginx/certs/.gitignore` z tej samej paczki — wykonawca
+commituje dopiero po teście dymnym, więc każdy nowy plik bloku jest w tej chwili „nieśledzony”.
+Zamiast stanu sprawdzamy właściwość: `git check-ignore` musi ignorować `cert.pem` i `key.pem`,
+a nie może ignorować samego `.gitignore` (kontrola dodatnia). Nauczka: test, który biegnie
+w środku procesu, sprawdza własności, a nie migawkę stanu — chyba że stan „przed commitem”
+jest dokładnie tym, co chcemy zmierzyć.
