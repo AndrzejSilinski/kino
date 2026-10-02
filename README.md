@@ -43,39 +43,41 @@ co i tak byłoby bez sensu przy testowaniu współbieżności.
 ```bash
 git clone <repo> cinema
 cd cinema
-cp backend/.env.example backend/.env
-
-# Klucz podpisu kodów QR (bez niego aplikacja nie wystawi biletu).
-sed -i "s/^TICKET_QR_KEY=$/TICKET_QR_KEY=$(openssl rand -hex 32)/" backend/.env
-# Klucze Reverba (WebSocket): identyfikator aplikacji, klucz publiczny i sekret podpisu.
-sed -i "s/^REVERB_APP_ID=.*/REVERB_APP_ID=$(shuf -i 100000-999999 -n 1)/" backend/.env
-sed -i "s/^REVERB_APP_KEY=.*/REVERB_APP_KEY=$(openssl rand -hex 10)/" backend/.env
-sed -i "s/^REVERB_APP_SECRET=.*/REVERB_APP_SECRET=$(openssl rand -hex 20)/" backend/.env
-# Klucze trybu testowego Stripe'a: STRIPE_PUBLISHABLE_KEY, STRIPE_SECRET_KEY
-# uzupełnij ręcznie w backend/.env (Dashboard Stripe → Developers → API keys).
-
-# Worker i scheduler działają jako www-data (uid 82) i zapisują do storage/.
-mkdir -p backend/storage/app/private/tickets backend/storage/app/public backend/storage/fonts
-chmod -R a+rwX backend/storage backend/bootstrap/cache
-# Plakaty filmów spod /storage (Etap 7): względne dowiązanie, działa w WSL i w kontenerze.
-ln -s ../storage/app/public backend/public/storage
-
+# Pierwszy start buduje obraz i pobiera zależności composera — kilka minut; kolejne: sekundy.
 docker compose up --build -d
-docker compose exec php composer install
-docker compose exec php php artisan key:generate
-docker compose exec php php artisan migrate --seed
-docker compose restart worker scheduler reverb
 
 # Aplikacja klienta (Etap 8): npm w przypiętym kontenerze Node, dist/ serwuje nginx.
 sh tools/frontend/npm.sh ci --ignore-scripts
 sh tools/frontend/npm.sh run build
 ```
 
-Powiadomienia push są opcjonalne (`PUSH_ENABLED=false`); konfiguracja projektu Firebase
-i pliku konta serwisowego w `docker/secrets/` — patrz Etap 8.
+Od Etapu 10 (blok D) kroki, które wcześniej trzeba było wykonać ręcznie, robi entrypoint
+kontenera `php` (`docker/php/entrypoint.sh`) przed startem PHP-FPM:
 
-Kroki po `docker compose up` trafią do entrypointu kontenera w Etapie 10
-(wymóg „zero kroków ręcznych").
+- `backend/.env` z `.env.example`, jeśli go nie ma, i wygenerowane **puste** klucze
+  (`APP_KEY`, `TICKET_QR_KEY`, `REVERB_APP_ID`, `REVERB_APP_KEY`, `REVERB_APP_SECRET`) —
+  istniejący plik i ustawione wartości zostają nietknięte,
+- `composer install` przy pierwszym starcie i po zmianie `composer.lock`,
+- katalogi zapisu w `storage/` i dowiązanie <code>public/storage</code>,
+- migracje (`cinema:boot --migrate`, z blokadą przed równoległym uruchomieniem; testy
+  reguł startu: `BootCommandTest`),
+- dane demonstracyjne tylko do **pustej** bazy (nigdy w produkcji),
+- sygnał restartu dla workera i Reverba (nowy kod po aktualizacji).
+
+Worker, scheduler i Reverb startują dopiero po tych krokach (healthcheck kontenera `php`).
+Postęp: `docker compose logs -f php`.
+
+Ręcznie zostają tylko klucze trybu testowego Stripe'a: `STRIPE_PUBLISHABLE_KEY`,
+`STRIPE_SECRET_KEY` i `STRIPE_WEBHOOK_SECRET` w `backend/.env` (Dashboard Stripe →
+Developers → API keys), potem `docker compose restart worker`. Powiadomienia push są
+opcjonalne (`PUSH_ENABLED=false`); konfiguracja projektu Firebase i pliku konta serwisowego
+w `docker/secrets/` — patrz Etap 8.
+
+**Po restarcie Windows albo `wsl --shutdown`** Docker Desktop potrafi wystartować kontenery,
+zanim podłączy dystrybucję WSL. Kontenery z montażami z repozytorium kończą się wtedy kodem
+**127** i Docker ich nie ponawia (pułapka ET w `docs/etap10-notatki.md`). Wystarczy
+`docker compose up -d`, gdy Docker Desktop zgłosi gotowość; jeśli pokaże okno
+„WSL integration … unexpectedly stopped” — najpierw „Restart the WSL integration”.
 
 | Adres | Co |
 |---|---|
@@ -114,8 +116,10 @@ cinema/
 ├── docker/
 │   ├── nginx/default.conf    SPA z frontend/dist, prefiksy Laravela do PHP-FPM, /app/ do Reverba, CSP
 │   ├── secrets/              (Etap 8) plik konta serwisowego Firebase — poza gitem, montowany tylko do odczytu
-│   ├── php/Dockerfile        PHP 8.4-FPM Alpine: pdo_pgsql, redis, gd, intl, pcntl, zbar
-│   ├── php/conf.d/uploads.ini  (Etap 7) limity wysyłania plików PHP, podpięte jako wolumen
+│   ├── php/Dockerfile        (Etap 10) etapy base/dev/vendor/prod, obrazy bazowe po digeście
+│   ├── php/entrypoint.sh     (Etap 10) .env i klucze w dev, composer, storage, migracje, gotowość
+│   ├── php/conf.d/uploads.ini  (Etap 7) limity wysyłania plików PHP, od Etapu 10 w obrazie
+│   ├── php/prod/             (Etap 10) OPcache i pula FPM tylko dla obrazu produkcyjnego
 │   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
 ├── backend/                  aplikacja Laravel (API, kolejki, scheduler)
 │   ├── app/
@@ -291,7 +295,7 @@ wykonawcę paczek po każdym bloku i w CI) pilnuje obu rodzajów tabel inaczej:
 
 | Zestaw | Testów | Klas / plików | Uruchomienie |
 |---|---:|---|---|
-| PHPUnit | **505** | 71 klas | <code>docker compose exec php php artisan test</code> |
+| PHPUnit | **509** | 72 klas | <code>docker compose exec php php artisan test</code> |
 | Vitest | **210** | 53 pliki | <code>sh tools/frontend/npm.sh test</code> |
 | Flutter | **315** | 48 plików | <code>sh tools/flutter/flutter.sh test</code> |
 
@@ -526,8 +530,10 @@ SEAT_LOCK_SWEEP_BATCH=500            # rozmiar porcji przy czyszczeniu
 - ~~Kontener `scheduler` jeszcze nie istnieje~~ — **rozwiązane w Etapie 5**:
   kontener `scheduler` uruchamia `schedule:work`, a `cinema:seat-locks:sweep`
   wykonuje się co minutę.
-- **Migracje nie uruchamiają się same** przy `docker compose up` — po starcie trzeba
-  wykonać <code>php artisan migrate --seed</code>. Docelowo trafi to do entrypointu kontenera PHP.
+- ~~**Migracje nie uruchamiają się same** przy `docker compose up` — po starcie trzeba
+  wykonać <code>php artisan migrate --seed</code>.~~ — **rozwiązane w Etapie 10** (blok D):
+  entrypoint kontenera `php` wykonuje `cinema:boot --migrate`, a dane demonstracyjne
+  wczytuje tylko do pustej bazy.
 - ~~Brak broadcastu~~ — **rozwiązane w Etapie 6**: każda zmiana stanu miejsc
   podbija wersję w `SeatStateRecorder`, a po COMMIT wychodzi zdarzenie
   `seats.changed` na kanale seansu.
@@ -1394,11 +1400,11 @@ Poza testami automatycznymi sprawdzone ręcznie na działającym środowisku:
 - **Jeden Redis dla cache i kolejki, bez limitu <code>maxmemory</code>.** Dziś rośnie do
   granic pamięci hosta. Docelowo osobne instancje: cache z limitem i <code>allkeys-lru</code>,
   kolejka z <code>noeviction</code>, żeby wypychanie kluczy nigdy nie usunęło zadania.
-- **`zbar` i `imagemagick` w obrazie produkcyjnym** — do usunięcia przez
-  wieloetapowy Dockerfile (Etap 10), razem z przypięciem obrazu bazowego do
-  konkretnej wersji.
-- **Migracje i restart workera nie są automatyczne** — trafią do entrypointu
-  w Etapie 10.
+- ~~**`zbar` i `imagemagick` w obrazie produkcyjnym**~~ — **rozwiązane w Etapie 10**
+  (blok D): są tylko w etapie `dev` wieloetapowego `docker/php/Dockerfile`, a obrazy
+  bazowe są przypięte po digeście.
+- ~~**Migracje i restart workera nie są automatyczne**~~ — **rozwiązane w Etapie 10**
+  (blok D): entrypoint migruje bazę i wysyła `queue:restart` oraz `reverb:restart`.
 
 ---
 
@@ -1876,7 +1882,7 @@ catalog:repertoire:day:c3:2026-09-20:g2.5.11      (epoka . kino 3 . filmy)
   nowy przy ROLLBACK. Awaria pośrodku zostawia osierocony plik, nigdy wiersz
   wskazujący plik, którego nie ma.
 - **Limity:** reguła `max:5120` (5 MB), a PHP przyjmuje do 8 MB
-  (`docker/php/conf.d/uploads.ini`, podpięty jako `zz-uploads.ini`) — plik 6 MB
+  (`docker/php/conf.d/uploads.ini`, od Etapu 10 kopiowany do obrazu jako `zz-uploads.ini`) — plik 6 MB
   dostaje polski komunikat walidacji zamiast cichego odrzucenia przez PHP.
 - **Dysk `public`** z względnym dowiązaniem <code>public/storage</code>; dysk `local` ma
   `'serve' => false`, bo trasa `storage/{path}` zajmowała ten sam prefiks.
@@ -2069,8 +2075,9 @@ powodu jest stan zwrotu `refund`.
 ### Infrastruktura i konfiguracja
 
 - `docker/php/conf.d/uploads.ini` podpięty w kotwicy `x-php-app` jako
-  `/usr/local/etc/php/conf.d/zz-uploads.ini:ro` (`upload_max_filesize = 8M`,
-  `post_max_size = 10M`). Po zmianie pliku: `docker compose up -d --force-recreate php worker scheduler reverb`,
+  <code>/usr/local/etc/php/conf.d/zz-uploads.ini:ro</code> (`upload_max_filesize = 8M`,
+  `post_max_size = 10M`). Od Etapu 10 (blok D) plik jest kopiowany do obrazu; po zmianie:
+  `docker compose up -d --build --force-recreate php worker scheduler reverb`,
   potem `docker compose restart nginx`.
 - `backend/phpunit.xml`: `memory_limit` 512M dla całego zestawu testów.
 - Harmonogram: nowa komenda `cinema:bookings:retry-refunds` co 5 minut
@@ -2723,13 +2730,14 @@ pokazuje, że push jest wyłączony w tej instalacji.
    Klucz publiczny wpisz do `FIREBASE_VAPID_PUBLIC_KEY`.
 4. **Ustawienia projektu → Konta usługi → wygeneruj nowy klucz prywatny.** Pobrany plik
    JSON to **sekret**: zapisz go jako docker/secrets/firebase-service-account.json
-   (katalog ma `.gitignore` ignorujący całą zawartość) i nadaj prawa odczytu dla
-   kontenerów: chmod 644. Kontenery widzą katalog tylko do odczytu jako
+   (katalog ma `.gitignore` ignorujący całą zawartość) i nadaj prawo odczytu grupie
+   kontenerów (www-data, gid 82), nikomu innemu: `sudo chgrp 82` i `chmod 640` na tym pliku
+   (Etap 10; wcześniej było tu chmod 644). Kontener workera widzi katalog tylko do odczytu jako
    `/run/secrets/cinema`, więc w `.env`:
    `FCM_CREDENTIALS=/run/secrets/cinema/firebase-service-account.json`.
-5. `PUSH_ENABLED=true`, potem odtworzenie kontenerów z nowym wolumenem i restart nginx
-   (pułapka BJ): `docker compose up -d --force-recreate php worker scheduler reverb`
-   i `docker compose restart nginx`.
+5. `PUSH_ENABLED=true`, potem odtworzenie kontenera z wolumenem sekretów — od Etapu 10
+   tylko workera: `docker compose up -d --force-recreate worker` (w Etapie 8: wszystkich
+   kontenerów z kotwicy aplikacji i restart nginx, pułapka BJ).
 6. Sprawdzenie: `GET /api/v1/client-config` zwraca `push.enabled` równe true z kompletem pól
    `push.firebase`, a w aplikacji **Konto → Powiadomienia → Włącz powiadomienia w tej
    przeglądarce** zapisuje urządzenie.
@@ -3079,11 +3087,13 @@ repozytorium (jak sonda z Etapu 6) i piszą raporty z licznikiem porażek.
   każdym wyświetleniu.
 - **Token w `localStorage`** jest dostępny dla skryptu działającego na stronie; ochroną
   są CSP, brak `v-html` poza artykułami i termin ważności tokenu.
-- **Plik konta serwisowego z prawami 644 w środowisku deweloperskim** — kontenery
-  działają jako inny użytkownik niż WSL. W produkcji: menedżer sekretów albo
+- **Plik konta serwisowego w środowisku deweloperskim czyta grupa 82** (www-data
+  w kontenerach, chmod 640) — kontenery działają jako inny użytkownik niż WSL. Od Etapu 10
+  worker przy starcie ostrzega, gdy pliku nie może przeczytać (`cinema:boot --check-push`). W produkcji: menedżer sekretów albo
   sekrety Dockera z właścicielem procesu.
-- **Wolumen z sekretami trafia do wszystkich kontenerów z kotwicy aplikacji** (także
-  Reverba, który go nie potrzebuje) — do rozdzielenia przy wieloetapowym obrazie (Etap 10).
+- ~~**Wolumen z sekretami trafia do wszystkich kontenerów z kotwicy aplikacji**~~ —
+  **rozwiązane w Etapie 10** (blok D): `docker/secrets/` jest montowany tylko w workerze,
+  bo push wysyła wyłącznie kolejka.
 - **Znacznik push po płatności nie mówi o doręczeniu**; FCM nie potwierdza wyświetlenia
   powiadomienia bez dodatkowej telemetrii.
 - **Web Push działa na `localhost` i HTTPS**; na innym hoście po HTTP przeglądarka nie da

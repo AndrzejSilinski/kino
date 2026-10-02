@@ -1,0 +1,35 @@
+# Kontekst budowy obrazu PHP (docker/php/Dockerfile) to katalog główny repozytorium; BuildKit czyta
+# ten plik zamiast .dockerignore, bo leży obok Dockerfile i nazywa się <Dockerfile>.dockerignore.
+#
+# Lista DOZWOLONYCH: wszystko jest wykluczone, a do obrazu trafia tylko to, co wymienione niżej.
+# Odwrotna lista (wykluczenia) przepuściłaby każdy nowy plik w repozytorium — także sekret.
+*
+!docker/php/conf.d/uploads.ini
+!docker/php/entrypoint.sh
+!docker/php/prod/
+!backend/
+
+# Z backend/ nie trafiają do obrazu: lokalna konfiguracja z sekretami, zależności z dysku
+# dewelopera (obraz instaluje własne z composer.lock), dane i cache środowiska, testy.
+backend/.env
+backend/.env.*
+backend/auth.json
+backend/vendor/
+backend/node_modules/
+backend/public/storage
+backend/public/hot
+backend/storage/app/private/*
+backend/storage/app/public/*
+backend/storage/fonts/*
+backend/storage/framework/cache/data/*
+backend/storage/framework/sessions/*
+backend/storage/framework/testing/
+backend/storage/framework/views/*
+backend/storage/logs/*
+backend/storage/pail/
+backend/storage/*.key
+backend/bootstrap/cache/*.php
+backend/tests/
+backend/phpunit.xml
+backend/.phpunit.cache/
+backend/.phpunit.result.cache

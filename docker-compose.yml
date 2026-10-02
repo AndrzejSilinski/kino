@@ -13,23 +13,26 @@
 #
 # UWAGA: scalenie jest PŁYTKIE. Kontener, który nadpisuje depends_on,
 # musi powtórzyć całą listę zależności, a nie tylko dopisać nową.
+#
+# Etap 10, blok D: obraz wieloetapowy (docker/php/Dockerfile), tutaj etap "dev".
+# Kontekst budowy to katalog główny (Dockerfile kopiuje docker/php/ i — w etapie prod —
+# backend/); co trafia do kontekstu, wybiera docker/php/Dockerfile.dockerignore.
+# Po zmianie Dockerfile, entrypointu albo docker/php/conf.d/uploads.ini:
+#   docker compose up -d --build --force-recreate php worker scheduler reverb
 # ----------------------------------------------------------------------
 x-php-app: &php-app
   build:
-    context: ./docker/php
+    context: .
+    dockerfile: docker/php/Dockerfile
+    target: dev
   image: cinema/php:dev
   restart: unless-stopped
   volumes:
     # Bind mount: host code is visible inside the container.
     # Editing a file on the host takes effect immediately.
     - ./backend:/var/www/html
-    # Etap 7, blok F: limity wysyłania plików (plakaty). Tylko do odczytu.
-    # Po zmianie: up -d --force-recreate tych kontenerów + restart nginx (opis w pliku).
-    - ./docker/php/conf.d/uploads.ini:/usr/local/etc/php/conf.d/zz-uploads.ini:ro
-    # Etap 8, blok L: sekrety (plik konta serwisowego Firebase) z docker/secrets/, tylko do odczytu.
-    # Katalog jest w gicie z .gitignore ignorującym całą zawartość: Docker nie założy go jako root,
-    # a plik z kluczem prywatnym nie trafi do repozytorium. Ścieżka w FCM_CREDENTIALS.
-    - ./docker/secrets:/run/secrets/cinema:ro
+    # Etap 10, blok D: limity wysyłania plików (uploads.ini) są w obrazie, a sekrety tylko
+    # w kontenerze, który ich używa (worker niżej) — zamiast montażu wszędzie przez kotwicę.
   depends_on:
     postgres:
       condition: service_healthy
@@ -38,13 +41,39 @@ x-php-app: &php-app
   networks:
     - cinema
 
+# Etap 10, blok D: worker, scheduler i reverb startują dopiero, gdy entrypoint kontenera php
+# skończy migracje (healthcheck php = znacznik /tmp/cinema-ready). Pełna lista, bo scalenie
+# kotwicy jest płytkie.
+x-po-przygotowaniu: &po-przygotowaniu
+  php:
+    condition: service_healthy
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_started
+
 services:
   # ------------------------------------------------------------------
   # PHP-FPM - obsługuje żądania HTTP przekazywane przez nginx
+  #
+  # Etap 10, blok D: entrypoint (docker/php/entrypoint.sh) przygotowuje środowisko przed
+  # startem PHP-FPM — .env i brakujące klucze, composer install, katalogi storage/,
+  # dowiązanie public/storage, migracje, dane demonstracyjne do PUSTEJ bazy — i dopiero
+  # wtedy zgłasza gotowość. start_period: pierwszy start po sklonowaniu repozytorium
+  # pobiera zależności composera (minuty); kolejne trwają kilka sekund.
   # ------------------------------------------------------------------
   php:
     <<: *php-app
     container_name: cinema_php
+    environment:
+      CINEMA_SETUP: "1"
+      CINEMA_SEED_IF_EMPTY: "1"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/cinema-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 300s
 
   # ------------------------------------------------------------------
   # Queue worker - wykonuje zadania z kolejki Redis (PDF, mail, push)
@@ -77,11 +106,21 @@ services:
       --sleep=3
       --max-time=3600
     stop_grace_period: 75s
+    environment:
+      # Etap 10, blok D: przy starcie ostrzeżenie, gdy włączony push nie przeczyta pliku konta.
+      CINEMA_CHECK_PUSH: "1"
+    volumes:
+      - ./backend:/var/www/html
+      # Etap 8, blok L: sekrety (plik konta serwisowego Firebase) z docker/secrets/, tylko do odczytu.
+      # Katalog jest w gicie z .gitignore ignorującym całą zawartość: Docker nie założy go jako root,
+      # a plik z kluczem prywatnym nie trafi do repozytorium. Ścieżka w FCM_CREDENTIALS.
+      # Po dodaniu pliku albo zmianie PUSH_*/FCM_*: docker compose up -d --force-recreate worker
+      # Etap 10, blok D: TYLKO tutaj — powiadomienia push wysyła wyłącznie kolejka (ShouldQueue),
+      # więc php, scheduler i reverb pliku nie potrzebują. Uprawnienia w środowisku deweloperskim:
+      # grupa 82 (www-data w kontenerach) i chmod 640 — czyta właściciel i kontenery, nikt inny.
+      - ./docker/secrets:/run/secrets/cinema:ro
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
+      <<: *po-przygotowaniu
       mailpit:
         condition: service_started
 
@@ -98,6 +137,7 @@ services:
     container_name: cinema_scheduler
     user: "82:82"
     command: php artisan schedule:work
+    depends_on: *po-przygotowaniu
     environment:
       # Pułapka V: bez tego wyjście zaplanowanych komend (także ich logi na
       # stderr) ląduje w /dev/null. /proc/1/fd/2 to stderr procesu głównego
@@ -128,6 +168,7 @@ services:
     container_name: cinema_reverb
     user: "82:82"
     command: php artisan reverb:start
+    depends_on: *po-przygotowaniu
     stop_grace_period: 10s
     healthcheck:
       test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8080/up') === false ? 1 : 0);"]
@@ -140,13 +181,18 @@ services:
   # Nginx - HTTP server, the only publicly exposed container
   # ------------------------------------------------------------------
   nginx:
-    image: nginx:1.27-alpine
+    # Etap 10, blok D: obrazy infrastruktury przypięte po digeście (indeks wieloplatformowy,
+    # rozpoznanie Etapu 10). Tag zostaje dla czytelnika; o treści decyduje digest.
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
     container_name: cinema_nginx
     restart: unless-stopped
     ports:
       - "8080:80"   # application available at http://localhost:8080
     volumes:
       - ./backend:/var/www/html
+      # Pojedynczy plik jest związany z i-węzłem (pułapka BI): edytor, sed -i i git checkout
+      # zapisują NOWY plik, a kontener widzi stary — po zmianie: docker compose up -d --force-recreate nginx.
+      # Etap 10: to ostatni montaż pliku w środowisku deweloperskim (pułapka ET) — do bloku E (TLS).
       - ./docker/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       # Etap 8: SPA z frontend/dist. Montujemy CAŁY katalog frontend/, a nie dist/:
       # brakujący katalog wolumenu Docker tworzy jako root i "npm run build"
@@ -202,7 +248,7 @@ services:
   # mechanism relies on to enforce exclusivity at the database level.
   # ------------------------------------------------------------------
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
     container_name: cinema_postgres
     restart: unless-stopped
     environment:
@@ -230,7 +276,7 @@ services:
   # tracimy najwyżej ostatnią sekundę zapisów.
   # ------------------------------------------------------------------
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     container_name: cinema_redis
     restart: unless-stopped
     command: redis-server --appendonly yes
@@ -250,7 +296,8 @@ services:
   # kontenery w sieci cinema. Na zewnątrz wystawiamy wyłącznie interfejs.
   # ------------------------------------------------------------------
   mailpit:
-    image: axllent/mailpit:latest
+    # "latest" z dnia rozpoznania Etapu 10 — digest zamraża tę wersję.
+    image: axllent/mailpit:latest@sha256:ed9b00c609e77e99c79b93f1178255ebc271868920f2c69a8d166bd5634ed10d
     container_name: cinema_mailpit
     restart: unless-stopped
     ports:

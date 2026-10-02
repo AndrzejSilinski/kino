@@ -474,3 +474,158 @@ kasuje cały katalog.
 miarą: najpierw `--dry-run` i porównanie jego listy z bazą (żaden wskazany plik na liście),
 potem prawdziwy przebieg i sprawdzenie, że plik każdego filmu z plakatem nadal istnieje.
 Do katalogu trafia na czas testu jedna podstawiona, postarzona sierota — i ona ma zniknąć.
+
+Wynik bloku C2 (commit `1077bf2`): PHP 505 (w tym 4 nowe), test dymny 18/0. **Zastrzeżenie:**
+baza Andrzeja nie miała ani jednego filmu z plakatem, więc u niego sprawdzenie „żaden plik
+z bazy nie trafia na listę sierot” przeszło na pustym zbiorze. Tę własność pokryły przebieg
+u mnie (film z plakatem) i mutacja usuwająca warunek „plik wskazany przez film” — test dymny
+oblał ją dwiema niezależnymi kontrolami. Sam test dymny zostawił szkodę: pułapka ES niżej.
+
+---
+
+## Blok D — obraz wieloetapowy, entrypoint, sekrety tylko tam, gdzie potrzebne
+
+### Rozpoznanie
+
+Dwa skrypty u Andrzeja (`etap10_D_rozpoznanie.sh`, `etap10_D_restart.sh`), tylko odczyt,
+poza naprawą katalogu plakatów:
+
+- **baza `php:8.4-fpm-alpine` po digeście:** PHP 8.4.26, Alpine 3.24.2; w repozytorium Alpine są
+  `su-exec`, `tini`, `pax-utils`, `zbar`, `imagemagick`. Obraz `cinema/php:dev` sprzed bloku:
+  352 MB, entrypoint z bazy, `su-exec` brak, wszystkie pakiety `-dev` w środku.
+- **biblioteki rozszerzeń** (scanelf): libpq, libzip, libpng, libjpeg-turbo, freetype, icu-libs,
+  libgcc, libstdc++ — plus te, które baza już ma (musl, zlib, libsodium).
+- **uprawnienia:** `storage/` i `bootstrap/cache` należą do użytkownika WSL z prawami 777,
+  pliki tworzone przez kontenery do 82:82; **`storage/app/public/posters` należał do roota (755)**
+  — pułapka ES; **plik konta Firebase 600, właściciel 1000** — worker (uid 82) go nie czyta.
+- **kod 127:** pierwsze podejście („Quit Docker Desktop”) nie zrestartowało silnika — kontenery
+  miały ten sam `StartedAt` co przed nim. Dopiero `wsl --shutdown` odtworzył zdarzenie:
+  pułapka ET.
+
+### Decyzje
+
+**394. Jeden `docker/php/Dockerfile`, cztery etapy:** `base` (rozszerzenia, biblioteki
+uruchomieniowe, `su-exec`, entrypoint, `uploads.ini`), `dev` (composer, git, unzip, zbar,
+imagemagick; kod z bind mountu), `vendor` (etap budowania: `composer install --no-dev`,
+autoloader klasowy, `package:discover` bez pakietów deweloperskich) i `prod` (kod i vendor
+w obrazie, `php.ini-production`, OPcache bez sprawdzania dat plików). Compose buduje `dev`.
+Odrzucone: osobne Dockerfile dla dev i prod — rozjechałyby się przy pierwszej zmianie
+rozszerzeń; obraz produkcyjny z composerem i narzędziami testowymi — większa powierzchnia
+ataku i rozmiar bez żadnej korzyści w działaniu.
+
+**395. Biblioteki uruchomieniowe wylicza `scanelf` z gotowych plików `.so`**, a pakiety `-dev`
+i `$PHPIZE_DEPS` znikają w TEJ SAMEJ warstwie, w której powstały. Ręczna lista bibliotek
+rozjechałaby się z wersją Alpine (biblioteki ICU mają w nazwie numer wersji: `libicuuc.so.78`).
+Rozszerzenie redis z PECL przypięte (`redis-6.3.0`, najnowsze stabilne na pecl.php.net) —
+wcześniej `pecl install redis` brał to, co najnowsze w chwili budowy.
+
+**396. Wszystkie obrazy po digeście:** baza PHP, źródło composera (`composer:2@sha256:…`),
+nginx, postgres, redis i mailpit (`latest@sha256:…` — digest zamraża wersję z dnia rozpoznania).
+Digest to indeks wieloplatformowy, więc ten sam zapis działa na amd64 i arm64.
+
+**397. Entrypoint w powłoce robi sprawy systemowe, a decyzje o danych podejmuje komenda
+`cinema:boot` z testami.** Powłoka: użytkownicy (`su-exec`), `.env` i klucze w dev, composer,
+katalogi, dowiązanie, znacznik gotowości. PHP: migracje z `--isolated`, dane demonstracyjne
+tylko do pustej bazy i nigdy w produkcji, ostrzeżenie o zestarzałym repertuarze, kontrola
+pliku push. Każda z tych reguł przeszła test mutacyjny (6 mutacji, 6 wykrytych — w tym ta,
+która w ogóle nie wołała migracji: pierwsza wersja testu jej nie widziała, bo baza testowa
+jest już zmigrowana; teraz test wymaga komunikatu samej komendy `migrate`).
+
+**398. Przygotowanie tylko w kontenerze `php` (`CINEMA_SETUP=1`), a worker, scheduler i Reverb
+czekają na jego healthcheck** (znacznik `/tmp/cinema-ready`, `start_period` 300 s na pierwsze
+`composer install`). Odrzucone: migracje w każdym kontenerze — cztery równoległe migracje;
+osobna jednorazowa usługa `migrate` z `service_completed_successfully` — w dev php i tak musi
+poczekać na `composer install` i `.env`, więc przygotowanie i tak siedziałoby w jednym miejscu.
+`--isolated` chroni przed dwiema replikami w produkcji.
+
+**399. Entrypoint tylko UZUPEŁNIA:** tworzy `.env`, gdy go nie ma, i wpisuje klucze, które
+w nim są puste. Ustawionej wartości nie zmienia nigdy. Zestarzałych danych demonstracyjnych
+nie odświeża sam — `migrate:fresh` kasuje także dane wpisane ręcznie, więc to decyzja
+człowieka; entrypoint tylko ostrzega (poza produkcją). W produkcji: bez seedowania (konta
+demonstracyjne mają jawne hasła) i STOP bez `APP_KEY` w środowisku — wygenerowanie klucza
+przy starcie unieważniłoby sesje i zaszyfrowane dane przy każdym restarcie.
+
+**400. `docker/secrets/` tylko w workerze**, bo powiadomienia push wysyła wyłącznie kolejka
+(`ShouldQueue` we wszystkich powiadomieniach). Uprawnienia w dev: grupa 82 i `chmod 640`
+(wcześniej README kazało 644 — czytelny dla każdego użytkownika WSL). Worker przy starcie
+sprawdza plik (`cinema:boot --check-push`) i ostrzega zamiast przerywać: maile i PDF-y działają
+bez push. Odrzucone: `secrets:` w Compose — sekret z pliku to i tak montaż pojedynczego pliku,
+czyli dokładnie to miejsce, które po restarcie WSL kończy start kodem 127 (ET).
+
+**401. `uploads.ini` w obrazie zamiast montażu pliku.** Konfiguracja PHP należy do obrazu, a montaż
+pojedynczego pliku z WSL to jedno z dwóch miejsc porażki z ET. Drugie — `docker/nginx/default.conf`
+— zostaje do bloku E, który i tak przebudowuje nginx (TLS).
+
+**402. Obraz produkcyjny:** kod należy do roota i jest tylko do odczytu dla procesów aplikacji,
+zapis tylko do `storage/` (w produkcji wolumen) i `bootstrap/cache`; `clear_env = no` w puli FPM,
+bo konfiguracja przychodzi ze środowiska, nie z `.env`; każdy kontener przy starcie robi
+`artisan optimize` ze swoich zmiennych (każdy ma własny system plików obrazu). Sprawdzone u mnie
+bez `.env` i bez zmiennych: `package:discover` i `optimize` przechodzą (75 tras w cache).
+`expose_php = Off` ustawione jawnie (`docker/php/prod/security.ini`): `php.ini-production` z php-src
+zostawia `On`, a wyłączenie robią dopiero łatki dystrybucji (pułapka EV).
+
+### Pułapki
+
+**ES. Test dymny uruchomiony jako root zostawił katalog, do którego aplikacja nie zapisze.**
+Objaw: rozpoznanie bloku D pokazało `storage/app/public/posters` z właścicielem root i prawami
+755 — panel nie zapisałby żadnego plakatu (PHP-FPM działa jako www-data). Przyczyna: test dymny
+C2 podkładał sierotę przez `Storage::put()` poleceniem `docker compose exec php …`, czyli jako
+root, a katalogu nie było, bo żaden film nie miał plakatu — Laravel założył go z właścicielem
+procesu. Naprawa: `chown 82:82` (skrypt restartu), a entrypoint od teraz dodaje prawo zapisu
+katalogom w `storage/`, które go nie mają. Nauczka: wszystko, co tworzy pliki w danych
+aplikacji — także testy dymne i skrypty pomocnicze — wykonuj jako użytkownik aplikacji
+(`exec -u 82:82`, `su-exec`); „przeszło” nie znaczy „niczego nie zepsuło”, więc rozpoznanie
+po bloku sprawdza też właścicieli katalogów zapisu.
+
+**ET. Kod 127 po restarcie WSL to nieudany montaż, a nie brak polecenia.** Objaw: po
+`wsl --shutdown` (i wcześniej po restarcie Windows) `php`, `worker`, `scheduler`, `reverb`
+i `nginx` stały z kodem 127, a postgres, redis i mailpit działały. `docker inspect` →
+`State.Error`: `error mounting "/run/desktop/mnt/host/wsl/docker-desktop-bind-mounts/Ubuntu/…"
+to rootfs at "/usr/local/etc/php/conf.d/zz-uploads.ini" … not a directory` (nginx: to samo dla
+`default.conf`). Docker Desktop pokazał okno „WSL integration with distro 'Ubuntu' unexpectedly
+stopped”: jego proces pomocniczy próbował się skopiować do `/run/docker-desktop`, zanim Ubuntu
+skończyło start (lakoniczne `install: No such file or directory` z uutils). Przyczyna: Docker
+startuje kontenery z polityką restartu, zanim podłączy dystrybucję; montaż pojedynczego PLIKU
+z dystrybucji zawodzi, nieudany start dostaje kod 127, a polityka `unless-stopped` nie ponawia
+startu, który nigdy się nie udał. Kontenery bez montaży plików wstały same. Naprawa: „Restart
+the WSL integration” i `docker compose up -d`; mniej montaży plików (`uploads.ini` w obrazie,
+sekrety tylko w workerze), a obraz produkcyjny nie ma ich wcale. Nauczka: kod wyjścia
+kontenera, który NIGDY nie wystartował, nie pochodzi od programu — przyczyna jest w
+`State.Error`, a `docker compose down` kasuje ten dowód; najpierw `docker inspect`, potem
+naprawa. I: odtwarzając zdarzenie, sprawdź, że naprawdę zaszło (tu: niezmieniony `StartedAt`
+zdradził, że „Quit” nie zatrzymał silnika).
+
+**EU. Pomiar kolejności zepsuł krok, który przyszedł po akcji, a przed pomiarem.** Objaw:
+pierwszy przebieg testu dymnego bloku D: scheduler „wystartował przed gotowością php”, worker
+i reverb po niej. Raport wykonawcy pokazał, że Compose zrobił to dobrze (`cinema_php Healthy`,
+dopiero potem `Starting` trzech zależnych). Przyczyna: następny krok wykonawcy,
+`docker compose up -d --force-recreate nginx`, odtworzył także `php` — zależność nginx — więc
+entrypoint wykonał przygotowanie drugi raz, a jego `queue:restart` i `reverb:restart` zrestartowały
+worker i Reverb (scheduler na te sygnały nie reaguje). Test porównał czasy z DRUGĄ gotowością.
+Nauczka: pomiar zależności czasowych rób w sekwencji, którą test wykonuje sam, tuż przed
+pomiarem — między akcją a sprawdzeniem w potoku mogą działać inne kroki. Przy okazji wyszło,
+że sygnały restartu działają: po ponownym przygotowaniu worker i Reverb wstały z nowym kodem.
+
+**EV. Wzorce sprawdzone na próbce napisanej z pamięci, a nie z wyjścia narzędzia.** Objaw: trzy
+fałszywe FAIL w pierwszym przebiegu testu dymnego D. `php --ri redis` wypisuje
+„Redis Version => 6.3.0”, a wzorzec szukał wiersza zaczynającego się od „Version”; `expose_php`
+w `php.ini-production` z php-src to `On` (Debian, z którego znałem plik, łata go na `Off`);
+`unzip` w Alpine to aplet busyboxa obecny w każdym obrazie, więc „brak polecenia unzip” nie mógł
+odróżnić obrazu prod od dev. Przyczyna: zasada „każdy wzorzec najpierw na pliku, który ma go
+spełniać” była wykonana na próbce, którą sam napisałem według wyobrażenia o formacie. Nauczka:
+próbka do sprawdzenia wzorca pochodzi z prawdziwego narzędzia (u mnie: lokalne PHP z redis 6.3.0);
+gdy narzędzia nie ma, pytaj o wartości o zdefiniowanym formacie (`phpversion("redis")`,
+`ini_get()`, `apk info -e`) zamiast parsować tekst przeznaczony dla ludzi — a obecność
+pakietu sprawdzaj w menedżerze pakietów, nie przez `command -v`.
+
+**EW. Entrypoint zmienił katalog roboczy narzędziom, które używają obrazu inaczej niż Compose.**
+Objaw: drugi przebieg bloku D — test dymny 55/0, PHPUnit 509 — zatrzymał się na sprawdzaczu
+README: `Could not open input file: tools/readme-compliance/check.php`. Przyczyna: wykonawca
+uruchamia sprawdzacz (a także lint i aplikator łatki) przez `docker run -v "$PWD":/work -w /work
+cinema/php:dev …`, a entrypoint na początku robił `cd /var/www/html` i w tym katalogu wykonywał
+polecenie końcowe — `-w` przestało działać. Wyszło dopiero w kroku 12b, bo lint i łatka biegną
+jeszcze na starym obrazie, przed przebudową. Naprawa: entrypoint zapamiętuje katalog
+wywołania i wraca do niego przed `exec`; test dymny sprawdza `docker run -w /work … pwd`.
+Nauczka: entrypoint owija KAŻDE użycie obrazu — Compose, CI, `docker run` z narzędzi — więc
+poza swoimi krokami nie może zmieniać kontekstu wywołującego (katalog, argumenty, użytkownik);
+obraz testuj także w roli narzędzia, a nie tylko usługi.
