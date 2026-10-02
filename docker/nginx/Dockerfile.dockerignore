@@ -1,6 +1,19 @@
-# Kontekst budowy obrazu nginx (docker/nginx/Dockerfile) to katalog główny repozytorium.
-# Lista DOZWOLONYCH: do obrazu trafia tylko konfiguracja — nigdy certyfikaty z docker/nginx/certs/.
+# Kontekst budowy obrazów nginx (docker/nginx/Dockerfile) to katalog główny repozytorium.
+# Lista DOZWOLONYCH: konfiguracja nginx, źródła SPA i statyczne pliki backend/public — nigdy
+# certyfikaty z docker/nginx/certs/, .env ani zależności z dysku dewelopera.
 *
 !docker/nginx/default.conf
 !docker/nginx/cinema.conf
+!docker/nginx/prod.conf
+!docker/nginx/hsts-dev.conf
+!docker/nginx/hsts-prod.conf
 !docker/nginx/tls.sh
+!frontend/
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/*.local
+!backend/public/
+backend/public/storage
+backend/public/hot

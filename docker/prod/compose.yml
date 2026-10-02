@@ -1,0 +1,150 @@
+# Stos produkcyjny (Etap 10, blok F2) — DEV i PROD z .github/workflows/ci.yml, przez tools/deploy/deploy.sh.
+#
+# Serwer trzyma klon repozytorium; obrazy budują się NA serwerze z tej samej rewizji, którą sprawdziło CI
+# (etapy prod w docker/php/Dockerfile i docker/nginx/Dockerfile). Kod jest w obrazach — bez bind mountów.
+#
+# Pliki serwera obok tego pliku (docker/prod/.gitignore — poza gitem):
+#   prod.env             konfiguracja z sekretami (wzór: prod.env.example); czyta ją Compose (--env-file,
+#                        podstawianie ${...}) i każdy kontener aplikacji (env_file),
+#   certs/cert.pem, key.pem   certyfikat TLS (np. certbot),
+#   secrets/firebase-service-account.json   konto serwisowe FCM (grupa 82, chmod 640) — tylko worker.
+#
+# Uruchomienie ręczne (z katalogu głównego repozytorium na serwerze):
+#   docker compose --env-file docker/prod/prod.env -f docker/prod/compose.yml up -d --build --wait
+name: ${CINEMA_PROJECT:-kino}
+
+x-php-app: &php-app
+  build:
+    context: ../..
+    dockerfile: docker/php/Dockerfile
+    target: prod
+  image: kino-php:${CINEMA_TAG:-latest}
+  restart: unless-stopped
+  env_file: prod.env
+  volumes:
+    # storage/ to dane (bilety PDF, plakaty) — wolumen; pusty wolumen dostaje przy pierwszym użyciu
+    # katalogi z obrazu razem z właścicielem www-data.
+    - storage:/var/www/html/storage
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_started
+  networks:
+    - cinema
+
+x-po-przygotowaniu: &po-przygotowaniu
+  php:
+    condition: service_healthy
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_started
+
+services:
+  # Entrypoint (CINEMA_SETUP): migracje z blokadą, optimize, sygnały restartu; w produkcji bez seedowania.
+  php:
+    <<: *php-app
+    environment:
+      CINEMA_SETUP: "1"
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/cinema-ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 180s
+
+  worker:
+    <<: *php-app
+    user: "82:82"
+    command: php artisan queue:work redis --queue=default --tries=3 --timeout=60 --sleep=3 --max-time=3600
+    stop_grace_period: 75s
+    environment:
+      CINEMA_CHECK_PUSH: "1"
+    volumes:
+      - storage:/var/www/html/storage
+      - ./secrets:/run/secrets/cinema:ro
+    depends_on: *po-przygotowaniu
+
+  scheduler:
+    <<: *php-app
+    user: "82:82"
+    command: php artisan schedule:work
+    environment:
+      SCHEDULE_OUTPUT: /proc/1/fd/2
+    depends_on: *po-przygotowaniu
+
+  reverb:
+    <<: *php-app
+    user: "82:82"
+    command: php artisan reverb:start
+    stop_grace_period: 10s
+    depends_on: *po-przygotowaniu
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@file_get_contents('http://127.0.0.1:8080/up') === false ? 1 : 0);"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  nginx:
+    build:
+      context: ../..
+      dockerfile: docker/nginx/Dockerfile
+      target: prod
+    image: kino-nginx:${CINEMA_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      - "${CINEMA_HTTP_PORT:-80}:80"
+      - "${CINEMA_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./certs:/etc/nginx/certs-host:ro
+      - nginxtls:/etc/nginx/tls
+      # Plakaty spod /storage/: ten sam wolumen co storage/ aplikacji, tylko podkatalog, tylko odczyt.
+      - type: volume
+        source: storage
+        target: /var/www/html/public/storage
+        read_only: true
+        volume:
+          subpath: app/public
+    depends_on:
+      php:
+        condition: service_healthy
+    networks:
+      - cinema
+
+  postgres:
+    image: postgres:16-alpine@sha256:721873c34ceb9f8d8fc265984940dc982404c105f19ad51be9fdc5970a6080ea
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:?brak DB_DATABASE w prod.env}
+      POSTGRES_USER: ${DB_USERNAME:?brak DB_USERNAME w prod.env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?brak DB_PASSWORD w prod.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - cinema
+
+  redis:
+    image: redis:7-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redisdata:/data
+    networks:
+      - cinema
+
+volumes:
+  pgdata:
+  redisdata:
+  storage:
+  nginxtls:
+
+networks:
+  cinema:
+    driver: bridge

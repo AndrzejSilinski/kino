@@ -9,6 +9,8 @@
 #      i Web Push także pod adresem innym niż localhost (README, Etap 10),
 #   2. inaczej samopodpisany, wygenerowany raz do wolumenu /etc/nginx/tls (przetrwa odtworzenie
 #      kontenera): localhost, 127.0.0.1 i adresy z CINEMA_TLS_HOSTS (po przecinku).
+#   W obrazie prod (CINEMA_TLS_WYMAGANY=1, blok F2) punktu 2 nie ma: bez certyfikatu na serwerze
+#   kontener kończy się błędem, zamiast po cichu wystawić klientom samopodpisany.
 #
 # Nic nie trafia do katalogu repozytorium: kopia własnego certyfikatu i samopodpisany leżą w
 # wolumenie. Klucz prywatny ma prawa 600 i nie jest nigdy wypisywany.
@@ -23,6 +25,9 @@ if [ -f "$HOST/cert.pem" ] && [ -f "$HOST/key.pem" ]; then
   cp "$HOST/cert.pem" "$TLS/cert.pem"
   cp "$HOST/key.pem" "$TLS/key.pem"
   echo "$ME: certyfikat z docker/nginx/certs/"
+elif [ "${CINEMA_TLS_WYMAGANY:-0}" = 1 ]; then
+  echo "$ME: STOP — brak cert.pem i key.pem w katalogu certyfikatów serwera (docker/prod/certs/)" >&2
+  exit 1
 elif [ ! -s "$TLS/cert.pem" ] || [ ! -s "$TLS/key.pem" ] || [ -f "$TLS/.z-certs-host" ]; then
   SAN="DNS:localhost,IP:127.0.0.1"
   for h in $(printf '%s' "${CINEMA_TLS_HOSTS:-}" | tr ',' ' '); do
@@ -45,4 +50,6 @@ fi
 # wygeneruje samopodpisany, zamiast używać po cichu kopii, której właściciel już nie chce.
 if [ -f "$HOST/cert.pem" ] && [ -f "$HOST/key.pem" ]; then : > "$TLS/.z-certs-host"; fi
 chmod 600 "$TLS/key.pem"
-echo "$ME: $(openssl x509 -in "$TLS/cert.pem" -noout -enddate | sed 's/notAfter=/ważny do /')"
+if command -v openssl > /dev/null; then
+  echo "$ME: $(openssl x509 -in "$TLS/cert.pem" -noout -enddate | sed 's/notAfter=/ważny do /')"
+fi

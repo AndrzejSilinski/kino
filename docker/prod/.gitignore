@@ -1,0 +1,5 @@
+# Pliki SERWERA (Etap 10, blok F2) — nigdy w repozytorium: konfiguracja z sekretami, certyfikat TLS
+# z kluczem prywatnym, plik konta serwisowego Firebase.
+prod.env
+certs/
+secrets/

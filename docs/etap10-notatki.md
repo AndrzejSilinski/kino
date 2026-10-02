@@ -785,3 +785,82 @@ Fluttera nie budują APK, więc nie potrzebują platform; potrzebuje ich build A
 jednego `A && B || C`; polecenie Vitest z CI (`npm exec --no -- vitest run` z raportem JSON)
 uruchomione lokalnie — 210/210, raport we właściwym miejscu. Pełny przebieg potoku sprawdzi
 dopiero GitHub po pierwszym wypchnięciu.
+
+Wynik bloku F1 (commit `09400bb`): test dymny 40/0, sprawdzacz README 1746/0. Repozytorium
+`AndrzejSilinski/kino` (publiczne): `dev` i `main` wypchnięte, z zewnątrz — 79 commitów, workflow
+na miejscu, `backend/.env` nieobecny, gitleaks na publicznym klonie czysty. Narzędzie zapisujące
+pliki na pulpicie nie pisze pod `.github/workflows` — workflow przeszedł do paczki osobnym plikiem
+i skryptem ze sprawdzeniem sumy.
+
+---
+
+## Blok F2 — obrazy produkcyjne i wdrożenie DEV/PROD
+
+### Decyzje
+
+**417. Wdrożenie buduje obrazy NA serwerze z klonu repozytorium**, zgodnie z krokami zadania 5.3:
+`git pull` (polecenie SSH z CI), `composer install --no-dev` (etap `vendor` obrazu), `migrate --force`
+(entrypoint, `cinema:boot --migrate` z blokadą), `cache:clear`, restart workerów (nowe kontenery
+i `queue:restart`/`reverb:restart`), na PROD `artisan down` przed migracją i `up` po niej.
+Odrzucone na teraz: rejestr obrazów (GHCR) — budowa raz w CI i `pull` na serwerze byłyby
+szybsze, ale wymagają poświadczeń rejestru na serwerze i widoczności pakietów; to naturalny
+następny krok, a nie warunek zadania.
+
+**418. Wdrożenie tylko testowanej rewizji.** Zadania `deploy-*` mają `needs: [obrazy-prod]`,
+a `obrazy-prod` — wszystkie zadania testów. Na serwerze, po `git pull`, skrypt porównuje `HEAD`
+z `GITHUB_SHA`: jeśli w międzyczasie przyszło nowsze wypchnięcie, ten przebieg niczego nie wdraża
+(nowszy przebieg wdroży swoją, przetestowaną rewizję). `concurrency` per środowisko bez
+przerywania — wdrożenia idą po kolei.
+
+**419. Dane serwerów wyłącznie w sekretach środowisk `dev` i `prod`; bez nich krok jest
+pomijany z adnotacją, nie pada.** Zadanie dopuszcza serwery fikcyjne — czerwony krzyżyk przy
+każdym wypchnięciu uczyłby ignorowania czerwonego CI. Klucz hosta przypięty (`DEPLOY_KNOWN_HOSTS`,
+`StrictHostKeyChecking=yes`), klucz prywatny tylko na czas kroku (`trap` usuwa plik).
+
+**420. Zadanie `obrazy-prod` w CI buduje oba obrazy produkcyjne i sprawdza nginx** (`nginx -t`
+z certyfikatem i kontrola ujemna bez certyfikatu). Bez tego pierwszym miejscem, w którym
+Dockerfile prod mógłby się nie zbudować, byłby serwer w trakcie wdrożenia.
+
+**421. Obraz nginx prod: SPA i `backend/public` w obrazie, HTTP → HTTPS, HSTS, certyfikat
+wymagany.** Etap `spa` buduje frontend tym samym obrazem Node co `tools/frontend/npm.sh`.
+HSTS przez `include` pliku, który w dev jest pusty, a w prod zawiera nagłówek — dołączany także
+w każdej lokacji z własnym `add_header`, bo taki `add_header` wypiera nagłówki z poziomu server
+(sprawdzone lokalnie: bez `include` w lokacji `/index.html` dokument SPA wychodzi bez HSTS).
+`server_tokens off`. Bez certyfikatu `tls.sh` kończy start błędem (`CINEMA_TLS_WYMAGANY=1`):
+samopodpisany na produkcji to ostrzeżenie w przeglądarce każdego klienta.
+
+**422. `docker/prod/compose.yml` bez bind mountów kodu; pliki serwera poza gitem.** `prod.env`
+(sekrety), `certs/`, `secrets/` w `docker/prod/.gitignore`. Wolumen `storage` wspólny dla
+kontenerów PHP i — przez `subpath: app/public`, tylko do odczytu — dla nginx (plakaty).
+`prod.env.example` generowany z `backend/.env.example`: te same 90 kluczy z wartościami
+produkcyjnymi (`APP_DEBUG=false`, `SESSION_SECURE_COOKIE=true`), sekrety puste; test dymny
+pilnuje, żeby nowy klucz nie trafił tylko do jednego z plików.
+
+**423. Test dymny uruchamia stos produkcyjny NAPRAWDĘ, prawdziwym `deploy.sh`.** Osobny
+projekt Compose na portach 18080/18443, „serwer” z plików bloku, losowe sekrety, dwa wdrożenia
+(drugie z `artisan down`/`up` na działającym serwisie), na końcu `down -v` i usunięcie obrazów.
+Mierzy z zewnątrz: przekierowanie, HSTS, SPA z obrazu, konfigurację ze środowiska
+(`client-config` zwraca klucz Reverba z `prod.env`), `wss://`, brak danych demonstracyjnych,
+wspólny wolumen plakatów, 503 w trybie konserwacji i kolejność kroków wdrożenia.
+
+### Pułapki
+
+**FA. `/up` działa także w trybie konserwacji — z założenia.** Objaw: pierwszy przebieg testu
+dymnego F2: po `artisan down` adres `/up` nadal odpowiadał 200 i test uznał, że tryb konserwacji
+nie działa. Przyczyna: `withRouting(health: '/up')` w Laravelu dopisuje ten adres do wyjątków
+`PreventRequestsDuringMaintenance` (sprawdzone w `ApplicationBuilder` z vendora) — load balancer
+i healthcheck nie wyrzucają serwera z puli na czas wdrożenia. Ruch klientów (API) dostaje 503.
+Test mierzy teraz zwykłą trasę API i osobno sprawdza, że `/up` zostaje 200. Nauczka: zanim test
+uzna zachowanie frameworka za błąd, sprawdź w jego źródle, czy to nie decyzja projektowa;
+a sonda „czy serwis żyje” i sonda „czy klient dostaje treść” to dwa różne pomiary.
+
+**FB. Właściciela katalogów w nazwanym wolumenie nie wyznacza obraz, tylko kolejność montaży.**
+Objaw: w stosie prod `storage/app/public` w wolumenie należał do roota — `www-data` nie mógł
+zapisać plakatu (`mkdir: Permission denied`), a nginx nie miał czego pokazać. Obraz ma ten katalog
+z właścicielem `www-data`; ale nginx montuje ten sam wolumen z `subpath: app/public` i Docker
+zakłada brakujący podkatalog jako root, zanim kontener php skopiuje do PUSTEGO wolumenu
+zawartość obrazu (kopiowanie zachodzi tylko dla pustego wolumenu). Naprawa: kontener
+przygotowania (php, root) w obrazie prod sam zakłada katalogi `storage/` i oddaje `www-data`
+te, które do niego nie należą — płytko, tylko katalogi. Nauczka: ani prawa, ani zawartość
+nazwanego wolumenu nie są częścią obrazu — kontrakt wolumenu musi egzekwować kontener, który
+z niego korzysta, przy każdym starcie (tak samo jak entrypoint dev z decyzji 397 robi z bind mountem).

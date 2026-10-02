@@ -80,6 +80,18 @@ przygotuj_dev() {
 if [ "$IMAGE" = prod ]; then
   # W produkcji konfiguracja przychodzi ze środowiska, a nie z pliku .env, którego w obrazie nie ma.
   [ -n "${APP_KEY:-}" ] || { log "STOP: brak APP_KEY w środowisku kontenera (obraz prod nie czyta .env)"; exit 1; }
+  # storage/ to w produkcji wolumen (docker/prod/compose.yml). Jego zawartość i właściciel nie zależą
+  # od obrazu: podkatalog dla nginx (subpath app/public) Docker zakłada jako root, zanim kontener php
+  # skopiuje do pustego wolumenu katalogi z obrazu (pułapka FB). Kontener przygotowania (root) sam
+  # zakłada brakujące katalogi i oddaje www-data te, które do niego nie należą — tylko KATALOGI,
+  # płytko, bez przechodzenia po tysiącach biletów PDF.
+  if [ "${CINEMA_SETUP:-0}" = 1 ] && [ "$(id -u)" = 0 ]; then
+    for d in storage/app/private/tickets storage/app/public storage/fonts storage/framework/cache/data \
+             storage/framework/sessions storage/framework/views storage/logs; do
+      mkdir -p "$d"
+    done
+    find storage -maxdepth 3 -type d ! -user www-data -exec chown www-data:www-data {} +
+  fi
   # Każdy kontener ma własny system plików obrazu, więc każdy buduje własny cache konfiguracji,
   # tras, widoków i zdarzeń — ze swoich zmiennych środowiskowych.
   artisan optimize > /dev/null

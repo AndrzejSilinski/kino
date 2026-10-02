@@ -118,6 +118,27 @@ bez `backend/.env` — `docker compose up` z entrypointem, PHPUnit, sonda WebSoc
 samych skryptów co praca lokalna (`tools/frontend/npm.sh`, `tools/flutter/flutter.sh`), więc
 wersje narzędzi są te same, przypięte po digeście; akcje GitHuba — po SHA commita.
 
+**Wdrożenie (Etap 10, blok F2).** Po zielonych testach wypchnięcie na `dev` wdraża serwer DEV,
+a na `main` — PROD (zadania `deploy-dev` i `deploy-prod`, środowiska GitHuba `dev` i `prod`). CI łączy
+się przez SSH, robi `git pull` i uruchamia `tools/deploy/deploy.sh`: obrazy produkcyjne z tej rewizji
+(`composer install --no-dev` w etapie `vendor`, build SPA), na PROD `artisan down` przed migracją,
+nowa wersja (migracje z blokadą i restart workerów w entrypoincie), `cache:clear`, na PROD
+`artisan up`. Serwery w zadaniu mogą być fikcyjne: dane są wyłącznie w sekretach środowisk
+(`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`), a bez nich
+krok wdrożenia kończy się adnotacją „pominięte” zamiast błędu. Przygotowanie serwera (jednorazowo):
+
+```bash
+git clone https://github.com/AndrzejSilinski/kino.git /srv/kino && cd /srv/kino
+cp docker/prod/prod.env.example docker/prod/prod.env    # uzupełnić puste klucze (komentarz w pliku)
+mkdir -p docker/prod/certs docker/prod/secrets          # cert.pem + key.pem (np. certbot), konto FCM
+bash tools/deploy/deploy.sh prod                        # pierwsze uruchomienie ręcznie
+```
+
+`docker/prod/compose.yml` to stos bez bind mountów kodu: obrazy `kino-php` i `kino-nginx` (etapy
+`prod`), PostgreSQL i Redis po digeście, wolumen `storage` wspólny dla PHP i nginx (plakaty).
+nginx w produkcji przekierowuje HTTP na HTTPS, wysyła HSTS i bez certyfikatu na serwerze nie
+wystartuje (żadnego samopodpisanego zastępstwa).
+
 Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
 
 ```bash

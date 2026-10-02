@@ -9,6 +9,11 @@
 #   backend  docker compose z czystego klonu (entrypoint: .env, klucze, composer, migracje, dane
 #            demonstracyjne), PHPUnit, sonda WebSocket przez nginx i Reverb, zgodność README z kodem
 #            — z raportami Vitest i Fluttera z zadań front i mobile
+#   obrazy-prod  (blok F2) obrazy produkcyjne kino-php i kino-nginx z tej rewizji, nginx -t z certyfikatem
+#            i kontrola ujemna bez certyfikatu
+#   deploy-dev / deploy-prod  (blok F2) tylko po wypchnięciu na dev / main i tylko po zielonych testach
+#            (needs): SSH, git pull, tools/deploy/deploy.sh — z artisan down/up na PROD. Dane serwerów
+#            wyłącznie w sekretach środowisk GitHuba "dev" i "prod"; bez nich krok jest pomijany z adnotacją.
 #
 # Akcje przypięte po SHA commita (tag można przesunąć — ta sama zasada co digesty obrazów, pułapka W);
 # w komentarzu wersja, z której pochodzi SHA. Obrazy Dockera przypięte po digeście w skryptach.
@@ -147,3 +152,72 @@ jobs:
       - name: Logi kontenerów po porażce
         if: failure()
         run: docker compose logs --no-color --tail 150
+
+  obrazy-prod:
+    name: Obrazy produkcyjne (php, nginx)
+    needs: [sekrety, front, mobile, backend]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: docker build --target prod (php — composer install --no-dev; nginx — build SPA)
+        run: |
+          docker build -f docker/php/Dockerfile --target prod -t kino-php:ci .
+          docker build -f docker/nginx/Dockerfile --target prod -t kino-nginx:ci .
+      - name: nginx prod — konfiguracja z certyfikatem i STOP bez certyfikatu
+        run: |
+          mkdir -p "$RUNNER_TEMP/certs"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj /CN=ci \
+            -keyout "$RUNNER_TEMP/certs/key.pem" -out "$RUNNER_TEMP/certs/cert.pem" 2> /dev/null
+          docker run --rm --add-host php:127.0.0.1 -v "$RUNNER_TEMP/certs":/etc/nginx/certs-host:ro kino-nginx:ci nginx -t
+          if docker run --rm --add-host php:127.0.0.1 kino-nginx:ci nginx -t; then
+            echo "::error::obraz nginx prod wystartował bez certyfikatu"; exit 1
+          fi
+
+  deploy-dev:
+    name: Wdrożenie DEV
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    needs: [obrazy-prod]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: dev
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: SSH — git pull i tools/deploy/deploy.sh dev
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: bash tools/deploy/ci-ssh.sh dev
+
+  deploy-prod:
+    name: Wdrożenie PROD (artisan down / up)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [obrazy-prod]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: prod
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: SSH — git pull i tools/deploy/deploy.sh prod
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: bash tools/deploy/ci-ssh.sh prod
