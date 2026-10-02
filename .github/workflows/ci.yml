@@ -6,6 +6,8 @@
 #   sekrety  gitleaks na CAŁEJ historii (repozytorium jest publiczne), reguły z .gitleaks.toml
 #   front    npm ci, audit (strażnik: zależności produkcyjne, high), typecheck, Vitest, build
 #   mobile   pub get z lockfile, format, analyze --fatal-infos, flutter test
+#   apk      (blok G) APK wydania: R8, podpis kluczem z sekretów repozytorium (bez nich — klucz debug
+#            z adnotacją), tools/mobile/sprawdz-apk.sh, artefakt z APK i mapping.txt R8
 #   backend  docker compose z czystego klonu (entrypoint: .env, klucze, composer, migracje, dane
 #            demonstracyjne), PHPUnit, sonda WebSocket przez nginx i Reverb, zgodność README z kodem
 #            — z raportami Vitest i Fluttera z zadań front i mobile
@@ -117,6 +119,72 @@ jobs:
           path: raporty-ci/test.json
           if-no-files-found: error
           retention-days: 7
+
+  apk:
+    name: APK wydania (R8, podpis)
+    needs: [mobile]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Miejsce na dysku
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          df -h /
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Obraz i wolumeny Fluttera
+        run: sh tools/flutter/flutter.sh --przygotuj
+      # Sekrety repozytorium (nie środowiska): magazyn kluczy w base64, alias i hasło. Skrypt składa
+      # z nich katalog podpisu w $RUNNER_TEMP i ustawia KINO_PODPIS_KATALOG oraz KINO_ODCISK;
+      # bez sekretów — adnotacja i świadomie pusty KINO_PODPIS_KATALOG (klucz debug).
+      - name: Podpis wydania z sekretów
+        env:
+          KINO_PODPIS_MAGAZYN_BASE64: ${{ secrets.KINO_PODPIS_MAGAZYN_BASE64 }}
+          KINO_PODPIS_ALIAS: ${{ secrets.KINO_PODPIS_ALIAS }}
+          KINO_PODPIS_HASLO: ${{ secrets.KINO_PODPIS_HASLO }}
+        run: bash tools/mobile/podpis.sh ci
+      # google-services.json jest poza repozytorium (decyzja 292); bez niego APK działa, tylko bez FCM.
+      - name: Konfiguracja Firebase z sekretu (opcjonalnie)
+        env:
+          GOOGLE_SERVICES_JSON_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICES_JSON_BASE64" ]; then
+            (umask 077; printf '%s' "$GOOGLE_SERVICES_JSON_BASE64" | base64 -d > mobile/android/app/google-services.json)
+          else
+            echo "::notice title=APK bez FCM::brak sekretu GOOGLE_SERVICES_JSON_BASE64 — APK bez powiadomień push."
+          fi
+      - name: pub get (dokładnie z pubspec.lock)
+        run: sh tools/flutter/flutter.sh pub get --enforce-lockfile
+      # Adres API ze zmiennej repozytorium (Settings → Variables), nie z kodu. versionCode = numer
+      # przebiegu, więc kolejne APK z CI instalują się jako aktualizacja.
+      - name: flutter build apk --release
+        env:
+          API_BASE_URL: ${{ vars.KINO_API_BASE_URL || 'https://kino.example.com' }}
+        run: |
+          sh tools/flutter/flutter.sh build apk --release --build-number="$GITHUB_RUN_NUMBER" \
+            --dart-define=API_BASE_URL="$API_BASE_URL"
+      - name: Sprawdzenie APK (podpis, brak debuggable, AOT, zasoby) i mapping.txt R8
+        run: |
+          mkdir -p apk-ci
+          # Bez potoku do tee: domyślne "bash -e" w Actions nie ma pipefail, a błąd skryptu musi zatrzymać krok.
+          RC=0
+          sh tools/flutter/flutter.sh --powloka /work/tools/mobile/sprawdz-apk.sh \
+            build/app/outputs/flutter-apk/app-release.apk "$KINO_ODCISK" > apk-ci/SPRAWDZENIE.txt || RC=$?
+          cat apk-ci/SPRAWDZENIE.txt
+          test "$RC" = 0
+          test -s mobile/build/app/outputs/mapping/release/mapping.txt
+          cp mobile/build/app/outputs/flutter-apk/app-release.apk "apk-ci/kino-${GITHUB_SHA::7}.apk"
+          cp mobile/build/app/outputs/mapping/release/mapping.txt apk-ci/
+      - name: Usunięcie podpisu i konfiguracji Firebase z maszyny
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/kino-podpis" mobile/android/app/google-services.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: kino-apk
+          path: apk-ci/
+          if-no-files-found: error
+          retention-days: 14
 
   backend:
     name: Backend, sonda WebSocket, README

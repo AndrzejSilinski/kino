@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Etap 10, blok G: zasoby chronione przed usuwaniem nieużywanych zasobów (isShrinkResources).
+     Ikonę powiadomienia flutter_local_notifications odszukuje PO NAZWIE w czasie działania
+     (lib/core/firebase_push.dart), więc analiza odwołań w kodzie jej nie widzi — README wtyczki
+     wymaga tego wpisu, inaczej powiadomienie na pierwszym planie znika bez błędu. Manifest
+     odwołuje się do niej także dla FCM, ale nie zostawiamy tego przypadkowi. -->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@drawable/ic_notification" />

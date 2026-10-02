@@ -1,3 +1,7 @@
+// Etap 10, blok G: import, a nie pełna nazwa java.util.Properties — w skrypcie Gradle "java" to
+// akcesor rozszerzenia projektu (JavaPluginExtension) i przesłania pakiet (pułapka FD).
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
@@ -11,11 +15,34 @@ plugins {
 if (file("google-services.json").exists()) {
     apply(plugin = "com.google.gms.google-services")
 } else {
-    logger.lifecycle(
+    // logger.quiet, nie lifecycle/warn: "flutter build" bez -v uruchamia Gradle z -q, które
+    // wycina wszystko poza QUIET i ERROR (gradle.dart na tagu 3.47.4) — pułapka FC.
+    logger.quiet(
         "Etap 9: brak android/app/google-services.json - wtyczka Google Services " +
             "pominieta, push FCM nie bedzie dzialac w tym APK."
     )
 }
+
+// Etap 10, blok G, decyzja 425: podpis wydania. Magazyn kluczy i hasło NIGDY w repozytorium —
+// leżą w katalogu poza nim (domyślnie ~/.kino-podpis, zakłada go tools/mobile/podpis.sh nowy),
+// który tools/flutter/flutter.sh montuje tylko przy "build" i podaje tu przez KINO_PODPIS.
+// Klucze pliku podpis.properties: magazyn (ścieżka względem pliku), alias, haslo — jedno hasło,
+// bo magazyn PKCS12 nie obsługuje osobnego hasła klucza. Plik wskazany, ale niekompletny = błąd
+// konfiguracji (nigdy ciche przejście na klucz debug); brak KINO_PODPIS = klucz debug
+// z ostrzeżeniem (CI bez sekretów, próby lokalne).
+val podpisPlik: File? = System.getenv("KINO_PODPIS")?.takeIf { it.isNotBlank() }?.let { File(it).absoluteFile }
+val podpis: Properties? = podpisPlik?.let { plik ->
+    if (!plik.isFile) {
+        throw GradleException("Etap 10: KINO_PODPIS wskazuje na $plik, a takiego pliku nie ma")
+    }
+    Properties().apply { plik.inputStream().use { load(it) } }
+}
+
+fun podpisWartosc(klucz: String): String =
+    podpis?.getProperty(klucz)?.trim()?.takeIf { it.isNotEmpty() }
+        ?: throw GradleException("Etap 10: w $podpisPlik brak wartosci klucza \"$klucz\"")
+
+val budujeWydanie = gradle.startParameter.taskNames.any { it.contains("Release") }
 
 android {
     namespace = "pl.silinski.cinema"
@@ -46,12 +73,40 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (podpis != null) {
+            create("wydanie") {
+                val magazyn = podpisPlik!!.parentFile.resolve(podpisWartosc("magazyn"))
+                if (!magazyn.isFile) {
+                    throw GradleException("Etap 10: brak magazynu kluczy $magazyn (klucz \"magazyn\" w $podpisPlik)")
+                }
+                storeFile = magazyn
+                storePassword = podpisWartosc("haslo")
+                keyAlias = podpisWartosc("alias")
+                keyPassword = podpisWartosc("haslo")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Etap 9 buduje tylko debug APK. Podpis release i minifikacja
-            // wchodzą w Etapie 10 razem z CI; reguły dla Stripe i Fluttera
-            // leżą już w proguard-rules.pro, żeby ten krok był gotowy.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (podpis != null) {
+                signingConfigs.getByName("wydanie")
+            } else {
+                if (budujeWydanie) {
+                    logger.quiet(
+                        "Etap 10: UWAGA - brak KINO_PODPIS, APK wydania podpisany kluczem DEBUG " +
+                            "(do prob, nie do dystrybucji). Klucz: tools/mobile/podpis.sh nowy."
+                    )
+                }
+                signingConfigs.getByName("debug")
+            }
+            // R8 (zmniejszenie i zaciemnienie kodu Javy/Kotlina) i usuwanie nieużywanych zasobów.
+            // Wtyczka Gradle Fluttera włącza oba sama (FlutterPlugin.kt na tagu 3.47.4, o ile nie
+            // podano --no-shrink); zapisane jawnie, żeby wydanie nie zależało od domyślnych
+            // ustawień narzędzia. Zasoby wołane po nazwie chroni res/raw/keep.xml.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

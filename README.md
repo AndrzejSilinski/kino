@@ -139,6 +139,29 @@ bash tools/deploy/deploy.sh prod                        # pierwsze uruchomienie 
 nginx w produkcji przekierowuje HTTP na HTTPS, wysyła HSTS i bez certyfikatu na serwerze nie
 wystartuje (żadnego samopodpisanego zastępstwa).
 
+**APK wydania (Etap 10, blok G).** Build `release` ma włączone R8 (`isMinifyEnabled`,
+`isShrinkResources`, reguły w `mobile/android/app/proguard-rules.pro`) i jest podpisany kluczem
+wydania, który **nigdy nie trafia do repozytorium**: magazyn PKCS12 i `podpis.properties` leżą
+w `~/.kino-podpis`, a `tools/flutter/flutter.sh` montuje ten katalog tylko do odczytu i tylko przy
+`build`. Bez klucza build wydania przechodzi, ale z kluczem debug i głośnym ostrzeżeniem Gradle;
+plik wskazany, lecz niekompletny, przerywa build. Jednorazowo (hasło wpisujesz sam):
+
+```bash
+bash tools/mobile/podpis.sh nowy        # magazyn i podpis.properties w ~/.kino-podpis (prawa 600)
+sh tools/flutter/flutter.sh build apk --release --dart-define=API_BASE_URL=https://kino.example.com
+sh tools/flutter/flutter.sh --powloka /work/tools/mobile/sprawdz-apk.sh \
+  build/app/outputs/flutter-apk/app-release.apk "$(bash tools/mobile/podpis.sh odcisk)"
+```
+
+`tools/mobile/sprawdz-apk.sh` sprawdza podpis (`apksigner verify`, odcisk certyfikatu), brak
+`android:debuggable`, kod Darta skompilowany AOT i ikonę powiadomień po usunięciu nieużywanych
+zasobów. Zadanie `apk` w CI robi to samo i publikuje artefakt `kino-apk` (APK i `mapping.txt`
+R8 do odczytywania stosów wywołań). Klucz w CI pochodzi z sekretów repozytorium
+`KINO_PODPIS_MAGAZYN_BASE64` (`bash tools/mobile/podpis.sh schowek` kopiuje go do schowka bez
+wypisywania), `KINO_PODPIS_ALIAS` i `KINO_PODPIS_HASLO`; adres API — ze zmiennej `KINO_API_BASE_URL`,
+a `google-services.json` — z opcjonalnego sekretu `GOOGLE_SERVICES_JSON_BASE64`. Kopia zapasowa
+`~/.kino-podpis` poza komputerem jest obowiązkowa: bez tego klucza nie da się wydać aktualizacji.
+
 Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
 
 ```bash
@@ -3213,6 +3236,8 @@ sh tools/flutter/flutter.sh analyze --fatal-infos
 sh tools/flutter/flutter.sh test
 # APK z adresem API podanym przy budowaniu, nigdy ze stałej w kodzie
 sh tools/flutter/flutter.sh build apk --debug --dart-define=API_BASE_URL=http://localhost:8080
+# wydanie: R8 i podpis kluczem z ~/.kino-podpis (Etap 10, blok G — opis w „Uruchomienie od zera”)
+sh tools/flutter/flutter.sh build apk --release --dart-define=API_BASE_URL=https://kino.example.com
 ```
 
 Telefon obsługuje `tools/mobile/telefon.ps1` **z PowerShella na Windowsie**, bo port USB widzi

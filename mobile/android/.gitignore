@@ -8,11 +8,17 @@ gradle-wrapper.jar
 /gradlew
 /gradlew.bat
 /local.properties
+# Etap 10, blok G (pułapka FE): Gradle 9 zapisuje raport problemów konfiguracji
+# w build/ projektu głównego (android/), a nie w mobile/build, które przekierowuje Flutter.
+/build/
 GeneratedPluginRegistrant.java
 .cxx/
 
 # Remember to never publicly share your keystore.
 # See https://flutter.dev/to/reference-keystore
 key.properties
+# Etap 10, blok G: plik podpisu wydania trzymamy poza repozytorium (~/.kino-podpis);
+# ten wpis łapie tylko pomyłkę skopiowania go tutaj.
+podpis.properties
 **/*.keystore
 **/*.jks

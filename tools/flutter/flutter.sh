@@ -9,8 +9,17 @@
 #   sh tools/flutter/flutter.sh analyze --fatal-infos        analiza statyczna
 #   sh tools/flutter/flutter.sh test                         testy jednostkowe i widgetów
 #   sh tools/flutter/flutter.sh build apk --debug --dart-define=API_BASE_URL=http://localhost:8080
+#   sh tools/flutter/flutter.sh build apk --release --dart-define=API_BASE_URL=https://...   (Etap 10, blok G)
 #   sh tools/flutter/flutter.sh dart pub deps                dart zamiast flutter (pierwszy argument)
 #   sh tools/flutter/flutter.sh --powloka                    powłoka w kontenerze (diagnostyka)
+#   sh tools/flutter/flutter.sh --obraz                      nazwa obrazu (dla tools/mobile/*.sh)
+#
+# Podpis wydania (Etap 10, blok G, decyzja 425): katalog z magazynem kluczy i podpis.properties
+# leży POZA repozytorium — domyślnie ~/.kino-podpis (zakłada go tools/mobile/podpis.sh nowy).
+# Montowany tylko do odczytu i TYLKO dla "build"; analiza i testy go nie widzą.
+#   KINO_PODPIS_KATALOG nieustawione  ~/.kino-podpis, jeśli istnieje; inaczej klucz debug
+#   KINO_PODPIS_KATALOG=/ścieżka       ten katalog; brak w nim podpis.properties = STOP
+#   KINO_PODPIS_KATALOG=               (pusto) świadomie bez podpisu wydania: klucz debug
 #
 # Katalogiem roboczym jest mobile/, dopóki istnieje; przed blokiem B — katalog główny repozytorium,
 # żeby "flutter create ... mobile" mogło ten katalog założyć.
@@ -26,11 +35,14 @@
 #     dociąga platformy wymagane przez wtyczki natywne (decyzja 271, pułapka CN).
 set -eu
 
-FLUTTER_IMAGE='cinema/flutter:3.47.4'
+ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+# Etap 10, blok G (decyzja 424): tag obrazu z sumą Dockerfile. Obraz budujemy tylko wtedy, gdy go
+# nie ma, więc przy stałym tagu zmiana Dockerfile nigdy nie docierała do maszyny, na której obraz
+# już był — "u mnie" i "w CI" rozjechałyby się po cichu. Wolumeny SDK i HOME zostają te same.
+FLUTTER_IMAGE="cinema/flutter:3.47.4-$(sha256sum "$ROOT/docker/flutter/Dockerfile" | cut -c1-12)"
 SDK_VOLUME='cinema_flutter_sdk'
 ANDROID_VOLUME='cinema_flutter_android'
 HOME_VOLUME='cinema_flutter_home'
-ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 UIDGID="$(id -u):$(id -g)"
 
 przygotuj() {
@@ -73,6 +85,10 @@ case "${1:---version}" in
         echo "flutter.sh: gotowe (obraz $FLUTTER_IMAGE, wolumeny $SDK_VOLUME i $HOME_VOLUME)"
         exit 0
         ;;
+    --obraz)
+        echo "$FLUTTER_IMAGE"
+        exit 0
+        ;;
     --powloka)
         shift
         NARZEDZIE=sh
@@ -94,6 +110,28 @@ przygotuj
 KATALOG=/work
 [ -d "$ROOT/mobile" ] && KATALOG=/work/mobile
 
+PODPIS=''
+if [ "$NARZEDZIE" = flutter ] && [ "$1" = build ]; then
+    PODPIS_KATALOG="${KINO_PODPIS_KATALOG-$HOME/.kino-podpis}"
+    if [ -n "${KINO_PODPIS_KATALOG:-}" ] && [ ! -f "$PODPIS_KATALOG/podpis.properties" ]; then
+        echo "flutter.sh: STOP — w KINO_PODPIS_KATALOG=$PODPIS_KATALOG nie ma podpis.properties" >&2
+        exit 1
+    fi
+    if [ -n "$PODPIS_KATALOG" ] && [ -f "$PODPIS_KATALOG/podpis.properties" ]; then
+        # Ścieżka trafia do "docker run -v" bez cudzysłowów (zmienna PODPIS niżej): tylko znaki
+        # bezpieczne i tylko ścieżka bezwzględna — względną docker uznałby za nazwę wolumenu.
+        case "$PODPIS_KATALOG" in
+            /*) ;;
+            *) echo "flutter.sh: STOP — katalog podpisu musi być ścieżką bezwzględną: $PODPIS_KATALOG" >&2; exit 1 ;;
+        esac
+        case "$PODPIS_KATALOG" in
+            *[!A-Za-z0-9_./-]*) echo "flutter.sh: STOP — katalog podpisu ze znakami spoza [A-Za-z0-9_./-]: $PODPIS_KATALOG" >&2; exit 1 ;;
+        esac
+        PODPIS="-v $PODPIS_KATALOG:/podpis:ro -e KINO_PODPIS=/podpis/podpis.properties"
+        echo "flutter.sh: podpis wydania z $PODPIS_KATALOG" >&2
+    fi
+fi
+
 # GIT_CONFIG_*: SDK jest repozytorium git; przy niezgodności właściciela git odmawia odczytu,
 # a wtedy "flutter --version" pokazuje 0.0.0-unknown.
 # shellcheck disable=SC2086
@@ -108,5 +146,6 @@ exec docker run --rm --user "$UIDGID" $INTERAKCJA \
     -v "$ANDROID_VOLUME":/home/flutter/sdks/android-sdk \
     -v "$HOME_VOLUME":/home/fh \
     -v "$ROOT":/work \
+    $PODPIS \
     -w "$KATALOG" \
     --entrypoint "$NARZEDZIE" "$FLUTTER_IMAGE" "$@"

@@ -19,6 +19,16 @@
 # przenosi (pułapka CH).
 FROM gmeligio/flutter-android@sha256:ae5cb8df28e0ff40a51e683c1a5090b579cca055749dcc9fa405f040c8085557
 
+# Etap 10, blok G (decyzja 271 domknięta): komponenty SDK, które Gradle dociągał w trakcie każdego
+# pierwszego buildu — firebase_core i inne wtyczki kompilują się wobec starszych platform niż
+# android-36 z bazy, a cmake jest potrzebny do natywnej części buildu. Lista wzięta z wolumenu
+# po prawdziwym buildzie (docs/etap10-notatki.md, blok F1), nie z dokumentacji. W obrazie, bo CI
+# zaczyna od pustego wolumenu i pobierałby je przy każdym przebiegu. Licencje zaakceptowane w bazie.
+RUN sdkmanager --install "platforms;android-34" "platforms;android-35" "cmake;3.22.1" > /dev/null \
+ && test -d "$ANDROID_HOME/platforms/android-34" \
+ && test -d "$ANDROID_HOME/platforms/android-35" \
+ && test -x "$ANDROID_HOME/cmake/3.22.1/bin/cmake"
+
 USER root
 RUN chmod 0755 /home/flutter \
  && find /home/flutter/sdks -type d ! -perm -o=rx -exec chmod o+rx {} + \

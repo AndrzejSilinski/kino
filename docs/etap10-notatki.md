@@ -864,3 +864,111 @@ przygotowania (php, root) w obrazie prod sam zakłada katalogi `storage/` i odda
 te, które do niego nie należą — płytko, tylko katalogi. Nauczka: ani prawa, ani zawartość
 nazwanego wolumenu nie są częścią obrazu — kontrakt wolumenu musi egzekwować kontener, który
 z niego korzysta, przy każdym starcie (tak samo jak entrypoint dev z decyzji 397 robi z bind mountem).
+
+## Blok G — APK wydania: podpis kluczem spoza repozytorium, R8, zadanie `apk` w CI
+
+### Rozpoznanie
+
+- Obraz `cinema/flutter:3.47.4`: `keytool` i `jarsigner` w PATH (JDK 17.0.20), `apksigner`,
+  `zipalign` i `aapt2` tylko w `build-tools/36.0.0`; w `platforms/` jedna platforma (android-36).
+- Wtyczka Gradle Fluttera (FlutterPlugin.kt na tagu 3.47.4) sama włącza dla `release`
+  `isMinifyEnabled` i `isShrinkResources`, o ile nie podano `--no-shrink`, i dokłada
+  `flutter_proguard_rules.pro` oraz `proguard-rules.pro` aplikacji.
+- Reguły bibliotek ze źródeł na przypiętych tagach: `stripe_android` 14.1.0 ma własne
+  `-keep class com.stripe.** { *; }`; `flutter_local_notifications` 22.3.1 — reguły Gsona
+  przychodzą z Gsonem, ale README wtyczki wymaga `keep.xml` dla ikony wskazanej po nazwie.
+- AGP 9.1.0, Kotlin 2.4.0, Gradle 9.3.1; pliki `key.properties`, `*.jks`, `*.keystore` już
+  ignorowane przez `mobile/android/.gitignore`.
+
+### Decyzje
+
+**424. Tag obrazu Fluttera z sumą Dockerfile** (`cinema/flutter:3.47.4-<12 znaków sha256>`).
+`flutter.sh` buduje obraz tylko, gdy go nie ma — przy stałym tagu dopisanie platform SDK do
+Dockerfile nigdy nie dotarłoby do maszyny, na której obraz już był, i „u mnie” rozjechałoby się
+z CI bez śladu. Wolumeny (SDK, Android SDK, HOME z kluczem debug) zostają te same. Domknięcie
+decyzji 271: `platforms;android-34`, `platforms;android-35` i `cmake;3.22.1` w obrazie (lista
+z wolumenu po prawdziwym buildzie), bo CI zaczyna od pustego wolumenu.
+
+**425. Klucz wydania poza repozytorium, jeden katalog dla pracy lokalnej i CI.** `~/.kino-podpis`
+(magazyn PKCS12 i `podpis.properties` z kluczami `magazyn`, `alias`, `haslo`; prawa 700/600)
+zakłada `tools/mobile/podpis.sh nowy` — hasło wpisuje właściciel, trafia do keytoola zmienną
+środowiskową (`-storepass:env`), nie argumentem. `flutter.sh` montuje katalog tylko do odczytu
+i tylko dla `build`; Gradle dostaje ścieżkę w `KINO_PODPIS`. W CI `podpis.sh ci` składa ten sam
+katalog z trzech sekretów w `$RUNNER_TEMP` (usuwany w kroku `if: always()`). Jedno hasło, bo
+PKCS12 nie obsługuje osobnego hasła klucza. Odrzucone: `key.properties` w `mobile/android`
+(szablon Fluttera) — plik ignorowany przez gita, ale wciąż w drzewie repozytorium, o jedną
+pomyłkę w `.gitignore` albo `git add -f` od publicznego repozytorium; hasło w zmiennych
+środowiskowych powłoki — zostaje w historii i w środowisku każdego procesu.
+
+**426. Brak klucza ≠ błędny klucz.** Bez `KINO_PODPIS` wydanie jest podpisane kluczem debug
+z ostrzeżeniem Gradle (CI bez sekretów, próby lokalne) — tak jak wdrożenia z decyzji 419: brak
+konfiguracji to adnotacja, nie czerwone CI. Plik wskazany, ale niekompletny, albo brak magazynu
+— przerwanie buildu z nazwą brakującego klucza, nigdy ciche przejście na klucz debug.
+`KINO_PODPIS_KATALOG=` (pusto) to świadome „bez podpisu wydania”. Reguły R8 zostają celowo
+szerokie (cały Stripe i Firebase): mniejszy zysk rozmiaru w zamian za brak awarii, której nie
+złapie żaden test w kontenerze — arkusz płatności i powiadomienia sprawdza się dopiero na telefonie.
+Odrzucone: `--obfuscate` dla Darta — kod Darta w wydaniu i tak jest skompilowany AOT do kodu
+maszynowego, a zaciemnienie nazw utrudnia czytanie zgłoszeń awarii przy znikomej ochronie.
+
+**427. Jeden skrypt sprawdzający APK w teście dymnym i w CI** (`tools/mobile/sprawdz-apk.sh`,
+w kontenerze Fluttera). Wypisuje fakty, potem werdykt: podpis v2/v3 poprawny i — przy podanym
+odcisku — właściwy certyfikat, brak `application-debuggable`, brak `kernel_blob.bin` (jest tylko
+w buildzie JIT), `libapp.so` (AOT), pakiet, ikona powiadomień w tabeli zasobów. Formaty wyjść
+`aapt2` sprawdzone w źródle (`DumpManifest.cpp`); całość — kontrolą dodatnią na APK debug, który
+musi dać odwrotne fakty.
+
+**428. Zadanie `apk` w CI** (`needs: [mobile]`, osobno od wdrożeń): build wydania z
+`--build-number` = numer przebiegu (kolejne APK instalują się jako aktualizacja), adres API ze
+zmiennej repozytorium `KINO_API_BASE_URL`, `google-services.json` z opcjonalnego sekretu,
+`sprawdz-apk.sh` z odciskiem z `podpis.sh ci`, artefakt `kino-apk` (APK, `mapping.txt` R8,
+wynik sprawdzenia). Wykonawca paczek w wersji C zgłasza pola podpisu (`storePassword`,
+`keyPassword`, `keyAlias`) tylko z dosłowną wartością, a nie z odwołaniem do pliku poza repozytorium.
+
+### Pułapki
+
+**FC. Komunikat z `build.gradle.kts` znika w `flutter build`, jeśli nie jest na poziomie QUIET.**
+Objaw: ostrzeżenie „APK wydania podpisany kluczem DEBUG” napisane przez `logger.warn` nie pojawiłoby
+się w żadnym wyjściu — a ten sam los miał od Etapu 9 komunikat decyzji 292 o braku
+`google-services.json` (`logger.lifecycle`). Przyczyna: narzędzie Fluttera bez `-v` uruchamia
+Gradle z `-q` (`gradle.dart` na tagu 3.47.4), a tryb cichy przepuszcza tylko poziomy QUIET i ERROR.
+Znalezione przy czytaniu źródła, zanim test dymny zaczął szukać ostrzeżenia w wyjściu. Oba
+komunikaty są teraz `logger.quiet`, a test dymny sprawdza, że ostrzeżenie naprawdę jest w wyjściu
+buildu. Nauczka: ostrzeżenie, którego nikt nie zobaczy, jest gorsze niż brak ostrzeżenia, bo daje
+złudzenie zabezpieczenia — każde ostrzeżenie trzeba raz zobaczyć w wyjściu tego samego polecenia,
+którym buduje użytkownik, a nie tylko w kodzie.
+
+**FD. `java.util.Properties` w `build.gradle.kts` się nie kompiluje — „java” to tam co innego.**
+Objaw: pierwszy przebieg testu dymnego G, każdy build wydania padł w 13 s na „Unresolved
+reference 'util'” w wierszu `java.util.Properties()`. Przyczyna: w skrypcie Gradle w Kotlinie
+nazwa `java` najpierw trafia w wygenerowany akcesor rozszerzenia projektu (`java { … }`,
+JavaPluginExtension) i przesłania pakiet `java`, więc pełna nazwa klasy przestaje być pełną nazwą.
+Naprawa: `import java.util.Properties` na początku pliku. Nie mogłem tego złapać przed paczką —
+w moim środowisku nie ma dostępu do repozytoriów Google, więc skryptu Gradle nie kompiluję; dlatego
+test dymny buduje naprawdę, a nie sprawdza samych wzorców. Nauczka: w językach osadzonych (DSL)
+zasięg nazw jest inny niż w samym języku — to, co jest jednoznaczne w zwykłym Kotlinie, w skrypcie
+z wstrzykniętymi akcesorami może znaczyć coś innego; kod, którego nie da się skompilować przed
+wysłaniem, wysyłam z testem, który go skompiluje jako pierwszy krok, i szybko.
+
+**FE. Nieudany build wydania zostawił plik, którego `.gitignore` nie obejmował.** Objaw: po
+wycofaniu pierwszego przebiegu G strażnik czystego repozytorium zatrzymał drugi na
+`?? mobile/android/build/reports/problems/problems-report.html`. Przyczyna: Gradle 9 zapisuje raport
+problemów (tu: przestarzały blok `android {}` przy `android.newDsl=false`) w `build/` obok
+`settings.gradle.kts`, czyli w `mobile/android/build` — niezależnie od `buildDirectory`, które
+szablon Fluttera przekierowuje do `mobile/build`; a ignorowany był wyłącznie `mobile/build`. Debug buildy z Etapu 9 tego
+nie zostawiały, bo Gradle pisze raport tylko przy problemach w konfiguracji. Naprawa:
+`/build/` w `mobile/android/.gitignore`. Nauczka: listę ignorowanych ścieżek ustala się na
+wynikach WSZYSTKICH ścieżek narzędzia — także nieudanych i rzadkich wariantów (release, błąd
+konfiguracji) — a nie tylko na wynikach jednej udanej budowy.
+
+**FF. Build wydania pada na zależności, której nie ma w żadnym publicznym repozytorium.** Objaw:
+drugi przebieg testu dymnego G — Gradle kompiluje wszystko, po czym `:stripe_android:lintVitalAnalyzeRelease`
+kończy się „Could not find com.google.android.gms:play-services-tapandpay:18.8.0”. Przyczyna:
+`stripe_android` 14.1.0 (źródło na tagu `v14.1.0`) ma `compileOnly` na
+`stripe-android-issuing-push-provisioning:1.3.0`, a ta ciągnie TapAndPay — SDK Google'a do
+wydawania kart do portfela, dostępny tylko po umowie z Google. Build debug nie uruchamia lintu
+wydania, więc w Etapie 9 tego nie było widać. Naprawa: wykluczenie tej jednej biblioteki ze
+wszystkich konfiguracji w `mobile/android/build.gradle.kts` (aplikacja nie wydaje kart, biblioteka
+i tak nie trafia do APK). Odrzucone: wyłączenie `lintVital` — zgasiłoby sprawdzenie dla wszystkich
+modułów, żeby ominąć jeden brakujący plik. Nauczka: wariant wydania uruchamia zadania, których
+debug nie dotyka (lint wydania, R8, usuwanie zasobów), więc „debug się buduje” nie mówi nic
+o wydaniu — pierwszy build wydania trzeba zrobić jak najwcześniej, a nie na końcu projektu.
