@@ -110,6 +110,14 @@ wygenerował — nigdy w repozytorium. Linki z maili i powiadomień push biorą 
 są tylko w produkcji: na localhost przeglądarka zapamiętałaby HTTPS dla całego hosta, a aplikacja
 mobilna łączy się przez `http://localhost:8080` (`adb reverse`).
 
+**CI (Etap 10, blok F): `.github/workflows/ci.yml`.** Przy każdym wypchnięciu na `dev` i `main`
+i przy pull requeście: gitleaks na całej historii, frontend (npm ci, audit, typecheck, Vitest,
+build), aplikacja mobilna (format, `flutter analyze --fatal-infos`, testy) oraz — z czystego klonu,
+bez `backend/.env` — `docker compose up` z entrypointem, PHPUnit, sonda WebSocket
+<code>bash tools/realtime-probe/run.sh</code> i sprawdzacz zgodności README z kodem. CI używa tych
+samych skryptów co praca lokalna (`tools/frontend/npm.sh`, `tools/flutter/flutter.sh`), więc
+wersje narzędzi są te same, przypięte po digeście; akcje GitHuba — po SHA commita.
+
 Webhooki Stripe'a lokalnie (Stripe CLI, osobny terminal):
 
 ```bash
@@ -2318,8 +2326,9 @@ Poza testami automatycznymi. Przeglądarkę i Reverb sprawdzałem w środowisku 
   martwe <code>SCREENING_CLEANUP_BUFFER</code>), `CACHE_STORE` i `SESSION_DRIVER` z wartościami
   <code>database</code> w `.env.example`, `APP_NAME` (prefiksy kluczy w Redisie)~~ i ~~niespójne
   wartości `age_rating` w `MovieFactory`~~ — **rozwiązane w Etapie 10** (blok B); ~~zaufane proxy
-  przy TLS~~ (blok E: `TRUSTED_PROXIES` w `config/trustedproxy.php`, testy w `TrustedProxiesTest`), skrypt uruchamiający sondę WebSocket (blok B2) i sprawdzacz zgodności
-  README w CI (blok F; od bloku A2 uruchamia go wykonawca paczek po każdym bloku).
+  przy TLS~~ (blok E: `TRUSTED_PROXIES` w `config/trustedproxy.php`, testy w `TrustedProxiesTest`), skrypt uruchamiający sondę WebSocket (blok B2) i ~~sprawdzacz zgodności
+  README w CI~~ (blok F: zadanie `backend` w `.github/workflows/ci.yml`; lokalnie od bloku A2
+  uruchamia go wykonawca paczek po każdym bloku).
 
 ---
 
@@ -3127,8 +3136,11 @@ repozytorium (jak sonda z Etapu 6) i piszą raporty z licznikiem porażek.
   HTTPS na porcie 8443; z certyfikatem mkcert subskrypcja działa także pod adresem komputera
   w sieci, a z `APP_URL` na HTTPS powiadomienie dostaje `fcm_options.link`. Bez zaufanego
   certyfikatu (samopodpisany) przeglądarka nadal odmówi rejestracji service workera.
-- **Brak testów e2e w repozytorium** (Playwright): scenariusze z dwiema przeglądarkami
-  i płatnością są sprawdzane skryptami i listą kontrolną — do CI w Etapie 10.
+- **Brak testów e2e przeglądarki w repozytorium** (Playwright): scenariusze z dwiema
+  przeglądarkami i płatnością są sprawdzane skryptami i listą kontrolną. Od Etapu 10 (blok F)
+  CI uruchamia sondę WebSocket — dwóch klientów przez nginx i Reverb, blokada miejsca, zdarzenie
+  rezerwacji, ponowne połączenie — ale to nie jest test przeglądarki; e2e z Playwrightem zostaje
+  poza zakresem.
 - **Przypomnienie wychodzi tylko przy zakupie przed oknem** (Etap 5); zakup na mniej niż
   120 minut przed seansem nie dostaje przypomnienia ani mailem, ani pushem.
 - **Powiadomienie o odwołaniu seansu przez kino** ma dziś tylko mail; kanał push i deep

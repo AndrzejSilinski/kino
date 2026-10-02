@@ -725,3 +725,63 @@ Zamiast stanu sprawdzamy właściwość: `git check-ignore` musi ignorować `cer
 a nie może ignorować samego `.gitignore` (kontrola dodatnia). Nauczka: test, który biegnie
 w środku procesu, sprawdza własności, a nie migawkę stanu — chyba że stan „przed commitem”
 jest dokładnie tym, co chcemy zmierzyć.
+
+Wynik bloku E (commit `3723a65`, drugi przebieg): test dymny 39/0, PHP 513 (w tym 4 nowe),
+sprawdzacz README 1744/0. Pierwszy przebieg: 36/1 — pułapka EZ.
+
+---
+
+## Blok F1 — repozytorium publiczne i CI z testami
+
+### Rozpoznanie
+
+- Historia: 78 commitów, jedna gałąź `dev`, brak zdalnego repozytorium. gitleaks w trybie `git`
+  na całej historii z `.gitleaks.toml` — czysto; ten sam skan z samymi regułami domyślnymi
+  znajduje dokładnie 3 znane atrapy z rozpoznania A (kontrola, że skaner patrzy). Żaden plik
+  wrażliwy (`.env`, klucz, keystore, konto serwisowe, `google-services.json`, APK) nigdy nie
+  był dodany; największy obiekt — `composer.lock`, 369 KB. Wszystkie ścieżki wrażliwe
+  sprawdzone `git check-ignore` są ignorowane.
+- W WSL nie ma `gh`, klucza SSH ani menedżera haseł. Obraz `cinema/flutter:3.47.4` — 3,06 GB.
+- Platformy Androida dociągnięte przez Gradle do wolumenu: `android-34`, `android-35`
+  (w obrazie jest tylko `android-36`) i `cmake;3.22.1` — lista do decyzji 271 (blok G).
+- Akcje GitHuba: API niedostępne z mojego środowiska, więc tagi i SHA z `git ls-remote`,
+  a wejścia i środowisko uruchomieniowe z `action.yml` sklonowanych na przypiętym tagu.
+
+### Decyzje
+
+**410. Repozytorium publiczne, historia bez przepisywania.** Decyzja Andrzeja: publiczne
+(rekruter bez zaproszenia, Actions bez limitu minut), e-mail autora w 78 commitach zostaje
+(adres kontaktowy), logowanie gita kluczem SSH. Przed pierwszym wypchnięciem — skan całej
+historii (wyżej); w CI ten sam skan przy każdym wypchnięciu (zadanie `sekrety`).
+
+**411. CI używa narzędzi repozytorium, a nie gotowych akcji środowiskowych.**
+`tools/frontend/npm.sh` (Node po digeście), `tools/flutter/flutter.sh` (obraz z
+`docker/flutter/Dockerfile`), `docker compose` z entrypointem i sonda — te same, którymi
+wykonawca sprawdza każdy blok. Odrzucone: `setup-node`, `setup-php`, akcja Fluttera —
+inne wersje niż lokalnie i dodatkowy kod z zewnątrz w potoku z dostępem do repozytorium.
+
+**412. Tylko oficjalne akcje `actions/*`, przypięte po SHA commita** (`checkout` v7.0.1,
+`upload-artifact` v7.0.1, `download-artifact` v8.0.1 — wszystkie na Node 24). Tag akcji można
+przesunąć tak samo jak tag obrazu (pułapka W). `permissions: contents: read`,
+`persist-credentials: false` (token nie zostaje w `.git/config` na czas kolejnych kroków),
+`concurrency` przerywa przestarzałe przebiegi tej samej gałęzi.
+
+**413. Cztery zadania: `sekrety`, `front`, `mobile` równolegle, `backend` po `front`
+i `mobile`.** Sprawdzacz README potrzebuje raportów Vitest i Fluttera oraz `vendor/` z backendu,
+więc raporty przechodzą przez artefakty. `upload-artifact` po cichu pomija pliki w katalogach
+zaczynających się od kropki (sprawdzone w README akcji: „files within folders beginning with
+`.`”) — raport Vitest leży w `node_modules/.cache/`, więc przed wysłaniem kopiujemy go do
+zwykłego katalogu. Zadanie `mobile` zwalnia miejsce (preinstalowany Android SDK runnera,
+nieużywany — budujemy w przypiętym obrazie).
+
+**414. `backend` startuje z czystego klonu, bez `backend/.env`.** `docker compose up --build
+--wait` musi sam przejść całe „Uruchomienie od zera” (entrypoint: `.env`, klucze, composer,
+migracje, dane demonstracyjne) — CI jest dowodem, że README nie kłamie w tym punkcie.
+
+**415. Decyzja 271 (platformy Androida w obrazie) przechodzi do bloku G.** Testy i analiza
+Fluttera nie budują APK, więc nie potrzebują platform; potrzebuje ich build APK w CI.
+
+**416. Sprawdzone przed wysłaniem:** `actionlint` 1.7.12 (z shellcheck) — czysto po poprawce
+jednego `A && B || C`; polecenie Vitest z CI (`npm exec --no -- vitest run` z raportem JSON)
+uruchomione lokalnie — 210/210, raport we właściwym miejscu. Pełny przebieg potoku sprawdzi
+dopiero GitHub po pierwszym wypchnięciu.
