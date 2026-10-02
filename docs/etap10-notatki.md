@@ -972,3 +972,66 @@ i tak nie trafia do APK). Odrzucone: wyłączenie `lintVital` — zgasiłoby spr
 modułów, żeby ominąć jeden brakujący plik. Nauczka: wariant wydania uruchamia zadania, których
 debug nie dotyka (lint wydania, R8, usuwanie zasobów), więc „debug się buduje” nie mówi nic
 o wydaniu — pierwszy build wydania trzeba zrobić jak najwcześniej, a nie na końcu projektu.
+
+## Blok H — sekcja Etapu 10 w README i domknięcie etapu
+
+### Decyzje
+
+**429. Sekcja „Etap 10” w README redaguje ten plik, a nie go kopiuje.** README dostaje to, co
+trzeba wiedzieć, żeby projekt zrozumieć i uruchomić: co powstało, potok CI/CD, obrazy, HTTPS,
+APK wydania, porządki, wybrane decyzje i pułapki, testy, uczciwy stan weryfikacji i ograniczenia.
+Pełny zapis 71 decyzji i 26 pułapek zostaje tutaj; sekcja wskazuje ten plik. Sprawdzacz
+zgodności obejmuje nową sekcję automatycznie (każda „## Etap N”) — 81 nazw z kodu, zero braków;
+trzy mutacje (literówka w klasie, w ścieżce i w sumie tabeli testów) wychwycone.
+
+**430. Znaczek CI na górze README** zamiast zdania „testy przechodzą”: pokazuje stan ostatniego
+przebiegu na `main` w chwili czytania, a nie w chwili pisania. Do tego prawdziwy adres klonu
+w „Uruchomienie od zera”, wiersze Fluttera i CI/CD w tabeli stosu, nowe katalogi w strukturze
+repozytorium i Etap 10 zaznaczony w „Stanie prac”.
+
+**431. APK wydania niesprawdzony na urządzeniu — zapisane wprost.** Decyzja Andrzeja: testy bez
+telefonu (w Etapie 9 telefon nie dawał się podłączyć przez `adb`). Sprawdzone jest wszystko,
+co da się zmierzyć na samym pliku APK; czy po R8 działają arkusz Stripe'a i push, potwierdzić
+może tylko urządzenie, więc README mówi to w sekcji „co sprawdzone, a czego nie”, zamiast
+milczeć albo obiecywać.
+
+### Pułapki
+
+**FG. Nazwa usuniętej klasy przeszła sprawdzacz u mnie, a u Andrzeja — nie.** Objaw: pierwszy
+przebieg testu dymnego H zatrzymał się na `BRAK klasa ExampleTest` w nowej sekcji README, choć
+w moim środowisku ta sama sekcja dawała zero braków. Przyczyna: zdanie o USUNIĘCIU dwóch klas
+`ExampleTest` miało nazwę w odwróconych apostrofach, czyli jako nazwę z kodu; sprawdzacz szuka
+klas także w `backend/vendor`, a mój `vendor/` ma katalog testów PHPUnita (z plikami
+`ExampleTest.php`), którego paczka dystrybucyjna u Andrzeja i w CI nie zawiera. Naprawa: nazwa
+usuniętej klasy jako <code>…</code> — opis historii, nie odwołanie do kodu. Nauczka: wynik
+narzędzia, które przeszukuje zależności, zależy od tego, JAK je zainstalowano, a nie tylko od
+wersji; środowisko kontrolne musi mieć zależności z tego samego źródła co docelowe — albo
+ostatnie słowo należy do przebiegu w środowisku docelowym, jak tutaj.
+
+## Podsumowanie Etapu 10
+
+| Blok | Commit | Zakres |
+|---|---|---|
+| A | `22f9a5b` | wykonawca paczek: sprawdzacz README i gitleaks w każdym bloku |
+| A2 | `b41a0fd` | sprawdzacz README na wszystkich sekcjach, żywa tabela testów |
+| B | `8cc9c7f` | porządki: `.env.example`, `APP_NAME`, `age_rating`, `ExampleTest` |
+| B2 | `6c717c3` | sonda WebSocket jednym poleceniem |
+| C | `8ab4357` | nieudany zwrot (`refund.failed`), Etap 9 w „Stanie prac” |
+| C2 | `1077bf2` | sprzątanie osieroconych plakatów |
+| D | `6a4ad04` | obraz wieloetapowy, entrypoint, sekrety tylko tam, gdzie potrzebne |
+| E | `3723a65` | HTTPS na nginx, zaufane proxy, Web Push poza localhost |
+| F1 | `09400bb` | repozytorium publiczne, CI z testami |
+| F2 | `13363fb` | obrazy produkcyjne, wdrożenie DEV/PROD |
+| G | `130da9d` | APK wydania: podpis spoza repozytorium, R8, zadanie `apk` w CI |
+| H | ten blok | sekcja Etapu 10 w README, domknięcie notatek |
+
+Liczby na koniec etapu: PHPUnit **513** testów w 73 klasach, Vitest **210** w 53 plikach,
+Flutter **315** w 48 plikach; sprawdzacz README — 10 sekcji, zero braków; decyzje **361–431**,
+pułapki **EH–FG**.
+
+Najczęstszy wzorzec pułapek tego etapu: **narzędzie zachowuje się inaczej w wariancie, którego
+nie uruchomiliśmy** — build wydania zamiast debug (FD, FE, FF), produkcja zamiast dev (FA, FB),
+skrypt pod Compose zamiast `docker run` (EW), klient zamiast serwera (EX). Odpowiedź za każdym
+razem była ta sama: test dymny uruchamia DOKŁADNIE ten wariant, którego dotyczy blok, i tym samym
+poleceniem, którego użyje człowiek albo CI — a wzorzec sprawdzający najpierw na pliku, który
+musi go spełnić.

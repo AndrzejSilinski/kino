@@ -1,5 +1,7 @@
 # System rezerwacji biletów kinowych
 
+[![CI](https://github.com/AndrzejSilinski/kino/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/AndrzejSilinski/kino/actions/workflows/ci.yml)
+
 Pełna ścieżka sprzedaży biletów dla sieci kin: wybór kina i seansu, interaktywny
 plan sali z atomową blokadą miejsc w czasie rzeczywistym, płatność Stripe,
 bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
@@ -20,7 +22,9 @@ bilety z kodem QR w PDF, panel administracyjny oraz aplikacja mobilna.
 | Płatności | Stripe (Payment Intents, `stripe/stripe-php`) | patrz Etap 4 |
 | Bilety | `endroid/qr-code` (QR), `dompdf/dompdf` (PDF) | patrz Etap 5 |
 | Poczta w środowisku deweloperskim | Mailpit | następca nierozwijanego Mailhoga |
-| Konteneryzacja | Docker Compose | |
+| Aplikacja mobilna | Flutter (Android), Riverpod, go_router | patrz Etap 9 |
+| Konteneryzacja | Docker Compose, obrazy wieloetapowe po digeście | patrz Etap 10 |
+| CI/CD | GitHub Actions, gitleaks, wdrożenie przez SSH | patrz Etap 10 |
 
 ### Dlaczego PostgreSQL, a nie MySQL
 
@@ -41,7 +45,7 @@ co i tak byłoby bez sensu przy testowaniu współbieżności.
 ## Uruchomienie od zera
 
 ```bash
-git clone <repo> cinema
+git clone https://github.com/AndrzejSilinski/kino.git cinema
 cd cinema
 # Pierwszy start buduje obraz i pobiera zależności composera — kilka minut; kolejne: sekundy.
 docker compose up --build -d
@@ -185,6 +189,9 @@ Konta testowe (hasło `password`):
 
 ```text
 cinema/
+├── .github/workflows/ci.yml  (Etap 10) CI/CD: testy, APK wydania, obrazy produkcyjne, wdrożenia DEV/PROD
+├── .gitleaks.toml            (Etap 10) reguły skanera sekretów
+├── docs/                     notatki robocze etapów: decyzje i pułapki
 ├── docker-compose.yml        php, worker, scheduler, reverb, nginx, postgres, redis, mailpit, frontend (profil dev)
 ├── docker/
 │   ├── nginx/default.conf    (Etap 10) serwery :80 i :443 (TLS) — wspólna treść w nginx/cinema.conf
@@ -196,6 +203,8 @@ cinema/
 │   ├── php/entrypoint.sh     (Etap 10) .env i klucze w dev, composer, storage, migracje, gotowość
 │   ├── php/conf.d/uploads.ini  (Etap 7) limity wysyłania plików PHP, od Etapu 10 w obrazie
 │   ├── php/prod/             (Etap 10) OPcache i pula FPM tylko dla obrazu produkcyjnego
+│   ├── prod/                 (Etap 10) stos produkcyjny compose.yml i wzór prod.env — pliki serwera poza gitem
+│   ├── flutter/Dockerfile    (Etap 9) Flutter i Android SDK; od Etapu 10 z platformami 34/35 i cmake
 │   └── postgres/init/        tworzy bazę cinema_testing przy pierwszym starcie wolumenu
 ├── backend/                  aplikacja Laravel (API, kolejki, scheduler)
 │   ├── app/
@@ -221,6 +230,9 @@ cinema/
 ├── tools/admin-assets/       (Etap 7) pobieranie zasobów panelu: Node po digeście, npm ci
 ├── tools/readme-compliance/  (Etap 7, rozszerzony w Etapie 8) nazwy z README i tabele testów PHPUnit i Vitest kontra kod
 ├── tools/frontend/npm.sh     (Etap 8) npm dla frontend/ w kontenerze Node po digeście
+├── tools/flutter/flutter.sh  (Etap 9) Flutter w kontenerze; od Etapu 10 montuje klucz wydania przy build
+├── tools/deploy/             (Etap 10) deploy.sh na serwerze i ci-ssh.sh — krok wdrożenia w CI
+├── tools/mobile/             (Etap 9–10) telefon.ps1 (adb), podpis.sh i sprawdz-apk.sh dla APK wydania
 ├── frontend/                 (Etap 8) SPA klienta: Vue 3, Vite, Vue Router, Pinia, TypeScript, Vitest
 └── mobile/                   (Etap 9) Flutter
 ```
@@ -350,7 +362,7 @@ Ograniczenia poszczególnych etapów są opisane w ich sekcjach.
 - [x] Etap 7 — panel administracyjny (Livewire), cache w Redisie, moduł informacyjny
 - [x] Etap 8 — frontend Vue 3 (SPA), konto klienta, Web Push przez FCM
 - [x] Etap 9 — aplikacja Flutter
-- [ ] Etap 10 — CI/CD i dokumentacja
+- [x] Etap 10 — CI/CD, obrazy produkcyjne, HTTPS, APK wydania, dokumentacja
 
 ---
 
@@ -3484,7 +3496,8 @@ na urządzeniu pozostaje do potwierdzenia.
 - **Tylko Android.** iOS wymagałby konta dewelopera Apple, certyfikatów APNs i maszyny z macOS;
   kod poza `ic_notification.xml` i manifestem jest wieloplatformowy.
 - **APK tylko w wersji debug**, podpisany kluczem debug z wolumenu. Podpis wydania, minifikacja
-  i CI to Etap 10; reguły dla Stripe'a i Fluttera leżą już w `proguard-rules.pro`.
+  i CI to Etap 10; reguły dla Stripe'a i Fluttera leżą już w `proguard-rules.pro`. (Domknięte
+  w Etapie 10, blok G.)
 - **Adres API z parametru budowania** znaczy, że jeden APK mówi do jednego serwera. Przy wydaniu
   właściwym adres byłby stały, a `adb reverse` przestałby być potrzebny.
 - **Brak trybu offline.** Bez sieci aplikacja pokazuje komunikat i przycisk ponowienia; nie
@@ -3494,3 +3507,182 @@ na urządzeniu pozostaje do potwierdzenia.
   funkcja najwyższego poziomu i rejestracja przed `runApp`.
 - **Identyfikator kanału powiadomień występuje w dwóch miejscach** — w kodzie Darta i w manifeście
   — bo manifest nie umie czytać Darta. Pilnuje tego test dymny bloku.
+
+## Etap 10 — CI/CD, obrazy produkcyjne, HTTPS, APK wydania
+
+Ostatni etap zamienia projekt, który działa na jednym komputerze, w projekt, który **sam się
+sprawdza i daje się wdrożyć**: każde wypchnięcie przechodzi przez te same testy co praca lokalna,
+obrazy produkcyjne powstają z tej samej rewizji, a wdrożenie na DEV i PROD rusza tylko po zielonych
+testach. Do tego HTTPS na nginx, zaufane proxy, podpisany i zminifikowany APK wydania oraz porządki
+z listy długów poprzednich etapów.
+
+Etap był prowadzony blokami (A–H), każdy z testem dymnym i skanem sekretów przed commitem.
+Pełny zapis decyzji (**361–431**) i pułapek (**EH–FG**) — z objawem, przyczyną i nauczką — jest
+w `docs/etap10-notatki.md`; tutaj tylko to, co trzeba wiedzieć, żeby projekt zrozumieć i uruchomić.
+
+### Co powstało
+
+| Plik | Rola |
+|---|---|
+| `.github/workflows/ci.yml` | potok CI/CD: sekrety, front, mobile, backend, APK wydania, obrazy produkcyjne, wdrożenia |
+| `.gitleaks.toml` | reguły skanera sekretów — ten sam obraz gitleaks lokalnie i w CI |
+| `docker/php/Dockerfile` | etapy `base`, `dev`, `vendor`, `prod`; obrazy bazowe po digeście |
+| `docker/php/entrypoint.sh` | `.env` i klucze w dev, composer, katalogi `storage`, migracje, gotowość |
+| `docker/nginx/Dockerfile` | etapy `dev`, `spa` (build Vue w obrazie), `prod` |
+| `docker/nginx/tls.sh` | certyfikat przy starcie: własny albo samopodpisany (dev), w produkcji wymagany |
+| `docker/nginx/prod.conf` | HTTP → HTTPS, HSTS (`docker/nginx/hsts-prod.conf`), `server_tokens off` |
+| `docker/prod/compose.yml` | stos produkcyjny bez bind mountów kodu; `docker/prod/prod.env.example` — komplet kluczy |
+| `tools/deploy/deploy.sh` | wdrożenie na serwerze: obrazy, `artisan down`, migracje, `cache:clear`, `artisan up` |
+| `tools/deploy/ci-ssh.sh` | krok CI: SSH z przypiętym kluczem hosta, `git pull`, `deploy.sh` |
+| `tools/mobile/podpis.sh` | klucz wydania APK poza repozytorium (`nowy`, `odcisk`, `schowek`, `ci`) |
+| `tools/mobile/sprawdz-apk.sh` | sprawdzenie APK wydania — ten sam skrypt w teście dymnym i w CI |
+| `tools/realtime-probe/run.sh` | sonda WebSocket z Etapu 6 jednym poleceniem (także w CI) |
+| `backend/config/trustedproxy.php` | zaufane proxy z `TRUSTED_PROXIES`, domyślnie nikomu |
+| `BootCommand` | `cinema:boot` — migracje z blokadą, dane demonstracyjne tylko poza produkcją, kontrola push |
+| `PruneOrphanPostersCommand` | `cinema:posters:prune` — sprzątanie osieroconych plakatów (codziennie 3:45) |
+| `RefundData` | zdarzenia Stripe'a o zwrocie; nieudany zwrot (`refund.failed`) jako znacznik rozliczenia |
+
+### Potok CI/CD
+
+```text
+push / pull request (dev, main)
+ ├── sekrety ── gitleaks na CAŁEJ historii (repozytorium jest publiczne)
+ ├── front ──── npm ci, audit, typecheck, Vitest, build
+ ├── mobile ─── pub get z lockfile, format, analyze --fatal-infos, flutter test
+ │    └── apk ─ build wydania (R8, podpis z sekretów), sprawdzenie, artefakt kino-apk
+ └── backend (po front i mobile) ── compose z czystego klonu, PHPUnit, sonda WebSocket, README
+      └── obrazy-prod (po wszystkich testach) ── kino-php, kino-nginx, nginx -t z certyfikatem i bez
+           ├── deploy-dev   tylko push na dev
+           └── deploy-prod  tylko push na main — artisan down przed migracją, up po niej
+```
+
+Zasady, które trzymają ten potok w ryzach:
+
+- **Te same narzędzia lokalnie i w CI** — `tools/frontend/npm.sh`, `tools/flutter/flutter.sh`,
+  `docker compose` z entrypointem, `tools/realtime-probe/run.sh`, `tools/readme-compliance/check.php`.
+  „Przechodzi u mnie” i „przechodzi w CI” znaczą to samo, bo wersje narzędzi są przypięte po
+  digeście w jednym miejscu, a nie powtórzone w YAML-u.
+- **Akcje GitHuba tylko oficjalne (<code>actions/*</code>) i przypięte po SHA commita**, token z prawem
+  wyłącznie do odczytu, <code>persist-credentials: false</code> przy każdym checkoucie.
+- **Wdrożenie tylko testowanej rewizji.** Zadania wdrożeń mają `needs` na obrazy produkcyjne,
+  a te — na wszystkie testy. Po `git pull` serwer porównuje `HEAD` z rewizją, którą sprawdziło CI;
+  nowsze wypchnięcie w międzyczasie wdroży swój własny, przetestowany przebieg.
+- **Dane serwerów wyłącznie w sekretach środowisk** `dev` i `prod` (`DEPLOY_HOST`, `DEPLOY_USER`,
+  `DEPLOY_PATH`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`) — w workflow są tylko ich nazwy. Serwery
+  w zadaniu mogą być fikcyjne, więc bez sekretów krok kończy się adnotacją „pominięte”, a nie
+  czerwonym krzyżykiem, który uczyłby ignorowania czerwonego CI.
+
+### Obrazy i entrypoint
+
+`docker/php/Dockerfile` ma cztery etapy: `base` (rozszerzenia PHP, biblioteki uruchomieniowe
+wyliczone z plików `.so`, a nie z listy pakietów), `dev` (composer i narzędzia), `vendor`
+(`composer install --no-dev`, autoloader autorytatywny) i `prod` (konfiguracja produkcyjna PHP,
+OPcache, kod należący do roota i tylko do odczytu dla procesów aplikacji). Wszystkie obrazy —
+PHP, composer, nginx, Node, PostgreSQL, Redis, Mailpit, gitleaks, Flutter — są przypięte po digeście.
+
+Entrypoint robi sprawy systemowe (katalogi, prawa, `.env` w dev), a decyzje o danych zostawia
+komendzie `cinema:boot`: migracje z blokadą, dane demonstracyjne tylko w pustej bazie i **nigdy**
+w produkcji. Przygotowanie wykonuje wyłącznie kontener `php` (`CINEMA_SETUP=1`); worker,
+scheduler i Reverb czekają na jego healthcheck, więc nie startują na niezmigrowanej bazie.
+Plik konta serwisowego Firebase jest montowany **tylko do workera**, bo tylko kolejka wysyła push.
+
+### HTTPS i zaufane proxy
+
+TLS kończy nginx (<https://localhost:8443> w dev, :80 zostaje dla `adb reverse`). Certyfikat jest
+własny z `docker/nginx/certs/` (mkcert — instrukcja w „Uruchomienie od zera”) albo samopodpisany;
+w obrazie produkcyjnym nginx **bez certyfikatu nie wystartuje**. HSTS i przekierowanie HTTP → HTTPS
+są tylko w produkcji — na localhost przeglądarka zapamiętałaby HTTPS dla całego hosta.
+
+Za nginx Laravel widzi poprawny schemat i adres klienta dzięki `TRUSTED_PROXIES`; nginx nadpisuje
+nagłówki `X-Forwarded-*` własnymi wartościami, więc klient nie podrobi ani adresu, ani schematu.
+Domyślnie nie ufamy nikomu — puste `TRUSTED_PROXIES` to bezpieczny stan wyjściowy.
+
+### APK wydania
+
+Build `release` ma R8 i usuwanie nieużywanych zasobów, a podpisuje go klucz z `~/.kino-podpis`,
+który **nigdy nie trafia do repozytorium** — szczegóły i polecenia w „Uruchomienie od zera”.
+Wynik na tej samej aplikacji: **63 MB zamiast 216 MB** wersji debug, kod Darta skompilowany AOT,
+bez `android:debuggable`. Brak klucza nie przerywa budowy (klucz debug i widoczne ostrzeżenie),
+ale **niekompletna** konfiguracja podpisu — tak: ciche przejście na klucz debug byłoby gorsze niż błąd.
+
+### Porządki z listy długów
+
+- `backend/.env.example` opisuje działający stos z `docker-compose.yml`, a nie szablon Laravela;
+  `APP_NAME=Kino` zamiast trzech osobnych prefiksów.
+- Nieudany zwrot (`refund.failed`) zamyka rozliczenie z kodem przyczyny i NIE jest ponawiany
+  automatycznie — karta zamknięta odrzuci każdą kolejną próbę; panel pokazuje „zwrot NIEUDANY”.
+- Osierocone plakaty sprząta `cinema:posters:prune` — tylko pliki w kształcie nadawanym przez
+  aplikację, bez filmu i starsze niż 24 godziny.
+- Sprawdzacz zgodności README z kodem obejmuje **wszystkie** sekcje etapów, a nie tylko bieżącą
+  (wyszło 159 nazw, które po cichu przestały być prawdą), i jest krokiem CI.
+
+### Etap 10 — wybrane decyzje projektowe
+
+- **364.** Skaner sekretów to gitleaks w obrazie przypiętym po digeście — ten sam w wykonawcy
+  paczek i w CI; w CI skanuje całą historię, bo repozytorium jest publiczne.
+- **397.** Entrypoint w powłoce robi sprawy systemowe, decyzje o danych — komenda PHP z testami.
+- **400.** Sekrety tylko w kontenerze, który ich potrzebuje (konto FCM — tylko worker).
+- **406.** Zaufane proxy domyślnie nikomu; lista z `TRUSTED_PROXIES`.
+- **411.** CI używa skryptów repozytorium, a nie gotowych akcji środowiskowych.
+- **417.** Wdrożenie buduje obrazy na serwerze z klonu, krok po kroku według zadania (rejestr obrazów
+  odrzucony na teraz — wymaga poświadczeń na serwerze, a niczego nie dodaje do wymagań).
+- **419.** Brak sekretów wdrożenia = adnotacja, nie błąd; fikcyjne serwery są w zadaniu dozwolone.
+- **424.** Tag obrazu Fluttera z sumy Dockerfile, żeby lokalny obraz nie rozjechał się z CI.
+- **425.** Klucz wydania poza repozytorium, jeden katalog dla pracy lokalnej i CI.
+
+### Etap 10 — pułapki, na które trafiliśmy
+
+- **EI.** Ścieżka raportu testów wpisana w dwóch narzędziach rozjechała się przy zmianie etapu —
+  sprawdzacz dostawał „brak raportu” dla całej tabeli i nikt tego nie widział.
+- **ET.** Kod 127 po restarcie WSL to nieudany montaż pojedynczego pliku, a nie brak polecenia —
+  dlatego w compose nie ma już montaży pojedynczych plików.
+- **FA.** `/up` odpowiada 200 także w trybie konserwacji — z założenia Laravela; tryb konserwacji
+  sprawdza się na zwykłej trasie API.
+- **FB.** Właściciela katalogów w nazwanym wolumenie wyznacza kolejność montaży, a nie obraz.
+- **FC.** `flutter build` uruchamia Gradle w trybie cichym — komunikat z `build.gradle.kts` musi
+  być na poziomie QUIET, inaczej nikt go nie zobaczy.
+- **FF.** Build wydania padał na bibliotece Google'a, której nie ma w publicznych repozytoriach
+  (zależność wtyczki Stripe'a) — debug tego nie pokazuje, bo nie uruchamia lintu wydania.
+
+### Testy
+
+Testy PHP dodane i zmienione w Etapie 10 (stan na koniec etapu):
+
+| Klasa testu | Liczba | Obszar |
+|---|---:|---|
+| `BootCommandTest` | 4 | dane demonstracyjne tylko w pustej bazie i bez dublowania, nigdy w produkcji; migracje i ostrzeżenie o zestarzałym repertuarze; kontrola pliku konta push |
+| `TrustedProxiesTest` | 4 | bez listy nagłówki klienta ignorowane; zaufane proxy przekazuje schemat i adres; adres spoza listy nie podszyje się pod proxy; droga ze zmiennej `TRUSTED_PROXIES` |
+| `RefundFailedWebhookTest` | 6 | status cofnięty z powodem i bez ponowienia; drugie zdarzenie niczego nie zmienia; wyścig z zapisem przyjęcia; zdarzenia obce tylko odnotowane; prawdziwy adapter i podpis Stripe'a; panel z powodem po polsku |
+| `PruneOrphanPostersCommandTest` | 4 | usuwa tylko starą sierotę o nazwie nadawanej przez aplikację; próba na sucho niczego nie usuwa; krótsze okno nigdy nie obejmuje używanego pliku; harmonogram raz na dobę |
+| Etapy 1–9 | 495 | bez klas wymienionych wyżej; dwa puste <code>ExampleTest</code> z szablonu usunięte |
+| **Razem** | **513** | |
+
+Vitest (210) i Flutter (315) — bez zmian w liczbie testów; poprawione trzy testy Vitest, które
+mierzyły obciążenie maszyny zamiast zachowania (limit 1 s na dynamiczny import). Poza testami
+jednostkowymi każdy blok miał test dymny na prawdziwym stosie — od wdrożenia produkcyjnego
+z `artisan down`/`up` po dwa buildy APK wydania z kluczem tymczasowym.
+
+### Weryfikacja — co sprawdzone, a czego nie
+
+**Sprawdzone.** Stos produkcyjny uruchomiony naprawdę, prawdziwym `tools/deploy/deploy.sh`
+(osobny projekt Compose, dwa wdrożenia, tryb konserwacji, HSTS, `wss://`). TLS 1.2/1.3 i odmowa
+TLS 1.1 po stronie serwera. APK wydania: podpis i certyfikat (`apksigner`), brak trybu debug,
+R8 (<code>mapping.txt</code>), ikona powiadomień po usunięciu zasobów. Historia repozytorium i publiczny klon
+— czyste w gitleaks.
+
+**Niesprawdzone.** APK wydania **na urządzeniu**: czy po R8 działają arkusz płatności Stripe'a
+i powiadomienia push — reguły R8 są celowo szerokie, ale potwierdzić to może tylko telefon
+(ten sam powód co w Etapie 9: telefon nie dawał się podłączyć przez `adb`). Wdrożenia na DEV i PROD
+— serwery są fikcyjne, więc w CI kończą się adnotacją; kroki wdrożenia sprawdził test dymny na
+lokalnym stosie produkcyjnym.
+
+### Znane ograniczenia i co zrobiłbym mając więcej czasu
+
+- **Obrazy budowane na serwerze**, a nie raz w CI i pobierane z rejestru (GHCR) — szybsze
+  wdrożenie i identyczny obraz na DEV i PROD to naturalny następny krok.
+- **Brak testów e2e przeglądarki** (Playwright) w CI — sonda WebSocket sprawdza czas rzeczywisty
+  przez nginx i Reverb, ale nie klika w interfejs.
+- **Wolumeny SDK Fluttera nie odświeżają się same** po zmianie obrazu — nowy obraz trafia do nich
+  tylko przy zakładaniu wolumenu; w CI to bez znaczenia (zawsze czysty start).
+- **Klucz wydania jeden na środowisko** — przy publikacji w sklepie Play zostałby kluczem
+  „upload”, a właściwy podpis przejąłby Google Play App Signing.
